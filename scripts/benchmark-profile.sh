@@ -15,12 +15,16 @@
 # ---------------------------------------------------------------------------
 set -euo pipefail
 
-MYSQL="mariadb -uroot -p${MARIADB_ROOT_PASSWORD:-devpassword}"
-SLAP="mariadb-slap -uroot -p${MARIADB_ROOT_PASSWORD:-devpassword}"
+# MYSQL_ARGS permite apontar para outra instância (ex.: socket no OL8:
+#   MYSQL_ARGS="-uroot -S /tmp/m.sock")
+MYSQL_ARGS="${MYSQL_ARGS:--uroot -p${MARIADB_ROOT_PASSWORD:-devpassword}}"
+MYSQL="mariadb $MYSQL_ARGS"
+SLAP="mariadb-slap $MYSQL_ARGS"
 
 CONCURRENCY="${PROFILE_CONCURRENCY:-16}"
 QUERIES="${PROFILE_QUERIES:-36000}"      # múltiplo de 18 (1 iteração = 18 queries)
 SUSTAIN_SECS="${SUSTAIN_SECS:-300}"
+LOG_PATH="${PROFILE_LOG_PATH:-/var/lib/mysql/selective_profile.json}"
 
 SEL="SELECT v FROM t WHERE id = 500"
 MIX="$SEL;$SEL;$SEL;$SEL;$SEL;INSERT INTO t (v) VALUES ('profile-row-payload');$SEL;$SEL;$SEL;$SEL;$SEL;UPDATE t SET v='updated' WHERE id = 500;$SEL;$SEL;$SEL;$SEL;$SEL;DELETE FROM t WHERE id = LAST_INSERT_ID()"
@@ -33,7 +37,7 @@ prepare() {
     "
     $MYSQL -Dapp_main -e "INSERT INTO t (v) SELECT 'seed' FROM seq_1_to_1000;"
     $MYSQL -e "TRUNCATE mysql.selective_log_events" 2>/dev/null || true
-    rm -f /var/lib/mysql/selective_profile.json
+    rm -f "$LOG_PATH"
 }
 
 set_scenario() {  # <enabled> <general_log> <schemas_filter> <output>
@@ -43,7 +47,7 @@ set_scenario() {  # <enabled> <general_log> <schemas_filter> <output>
         SET GLOBAL selective_log_schemas_to_log='$3';
         SET GLOBAL selective_log_tables_to_log='';
         SET GLOBAL selective_log_output='$4';
-        SET GLOBAL selective_log_log_file_path='/var/lib/mysql/selective_profile.json';
+        SET GLOBAL selective_log_log_file_path='$LOG_PATH';
         SET GLOBAL selective_log_min_duration_ms=0;
     "
 }
@@ -99,8 +103,9 @@ status_num() {
 sample() {
     local t=$1
     local rss_kb file_kb logged failures errors
-    rss_kb=$(awk '/VmRSS/ {print $2}' /proc/1/status)
-    file_kb=$(du -k /var/lib/mysql/selective_profile.json 2>/dev/null | cut -f1 || echo 0)
+    local pid; pid=$(pidof mariadbd 2>/dev/null | awk '{print $1}'); pid=${pid:-1}
+    rss_kb=$(awk '/VmRSS/ {print $2}' "/proc/$pid/status")
+    file_kb=$(du -k "$LOG_PATH" 2>/dev/null | cut -f1 || echo 0)
     logged=$(status_num Selective_log_events_logged)
     failures=$(status_num Selective_log_write_failures)
     errors=$(status_num Selective_log_callback_errors)
@@ -132,6 +137,6 @@ echo "== RESUMO SUSTENTADO =="
 echo "duracao=${ELAPSED}s queries_totais=${TOTAL_QUERIES} qps_medio=$((TOTAL_QUERIES/ELAPSED))"
 echo "eventos_logados=$(status_num Selective_log_events_logged) (esperado ~1/6 das queries)"
 echo "drops=$(status_num Selective_log_events_dropped) write_failures=$(status_num Selective_log_write_failures) callback_errors=$(status_num Selective_log_callback_errors)"
-ls -la /var/lib/mysql/selective_profile.json
+ls -la "$LOG_PATH"
 
 set_scenario OFF OFF '' FILE

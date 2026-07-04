@@ -129,6 +129,30 @@ com o plugin ativo no cenário realista.
   atenção apenas ao crescimento da `mysql.selective_log_events` (mesmo
   ~224 B/evento + índice) — expurgo periódico recomendado.
 
+### Mesmo teste em Oracle Linux 8 (MariaDB 11.4.12 via RPM oficial)
+
+Repetido em container `oraclelinux:8` limpo com os RPMs do mariadb.org e o
+`.so` do build EL8 (v0.5.1), executor idêntico
+(`MYSQL_ARGS="-uroot -S /tmp/m.sock" scripts/benchmark-profile.sh`):
+
+| Cenário | qps (OL8) | Δ vs baseline |
+|---|---:|---:|
+| baseline | 32.143 | — |
+| `general_log=ON` | 31.496 | −2,0% |
+| **realista** `app_main:dml` FILE | 34.091 | +6,1% (ruído¹) |
+| `app_main:dml` TABLE | 32.258 | +0,4% (ruído) |
+| pior caso `app_main` FILE | 34.091 | +6,1% (ruído¹) |
+
+¹ Os cenários com o plugin ativo mediram *acima* do baseline — banda de
+ruído de ±6% nesse ambiente; a conclusão é a mesma do Ubuntu: custo do
+plugin abaixo do ruído.
+
+Sustentado 300 s (realista, FILE): **35.400 qps médios** (≈ 17,7× a demanda
+de produção), 1.865.996 eventos logados (6.220/s), RSS 257→261 MB estável,
+**zero** drops/write_failures/callback_errors. Arquivo: 422 MB para 1,87M
+eventos ≈ **226 B/evento** — mesma densidade do Ubuntu, valendo a mesma
+projeção de ~6,5 GB/dia para 20k DML/min auditados.
+
 ## Validação de memória (Valgrind)
 
 [`scripts/valgrind-test.sh`](../scripts/valgrind-test.sh) sobe o `mariadbd`
