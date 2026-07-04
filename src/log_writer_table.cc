@@ -155,7 +155,17 @@ static void *writer_thread_func(void *arg __attribute__((unused)))
     pthread_mutex_unlock(&q_mutex);
 
     for (size_t i= 0; i < batch.size(); i++)
-      run_insert(batch[i]);
+    {
+      /* never let an exception kill the writer thread (and the server) */
+      try
+      {
+        run_insert(batch[i]);
+      }
+      catch (...)
+      {
+        insert_failures++;
+      }
+    }
     batch.clear();
 
     if (stopping)
@@ -186,7 +196,16 @@ void table_writer_init()
 {
   pthread_mutex_lock(&q_mutex);
   if (queue == NULL)
-    queue= new (std::nothrow) std::deque<std::string>();
+  {
+    try
+    {
+      queue= new (std::nothrow) std::deque<std::string>();
+    }
+    catch (...)
+    {
+      queue= NULL;              /* enqueue() will refuse and drop */
+    }
+  }
   pthread_mutex_unlock(&q_mutex);
 }
 
@@ -225,10 +244,17 @@ bool table_writer_enqueue(std::string *sql)
       dropped_events++;
     else
     {
-      queue->push_back(std::string());
-      queue->back().swap(*sql);
-      pthread_cond_signal(&q_cond);
-      ok= true;
+      try
+      {
+        queue->push_back(std::string());
+        queue->back().swap(*sql);        /* swap: noexcept */
+        pthread_cond_signal(&q_cond);
+        ok= true;
+      }
+      catch (...)
+      {
+        dropped_events++;       /* out of memory: drop this event */
+      }
     }
   }
   pthread_mutex_unlock(&q_mutex);

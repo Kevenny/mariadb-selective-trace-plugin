@@ -228,3 +228,22 @@ path inalterado (mesmos locks; a comparação vira um AND).
 
 Limitação documentada: `WITH` (CTE) classifica como `select` — um
 `WITH ... UPDATE` seria tratado como select para fins de filtro por comando.
+
+## D16. Guards de exceção nas fronteiras C/C++ (v0.5.1)
+
+O risco residual apontado na análise de riscos: o plugin usa `std::string`
+na montagem do JSON/INSERT e no parse dos filtros; sob esgotamento de
+memória, um `bad_alloc` atravessando a fronteira `extern "C"` viraria
+`std::terminate` → abort do mariadbd inteiro. Todas as fronteiras ganharam
+`try/catch (...)`:
+
+1. `selective_log_notify` (callback de eventos) — descarta o evento;
+2. `check_*`/`update_*` das sysvars — o SET falha limpo / regras antigas
+   permanecem ativas (o unlock do rwlock fica fora do try, sempre executa);
+3. `table_writer_enqueue` — evento descartado e contado;
+4. loop da thread do writer — a thread sobrevive a qualquer exceção de um
+   INSERT individual.
+
+Exceções engolidas são contadas em `Selective_log_callback_errors`
+(SHOW GLOBAL STATUS) — valor diferente de zero indica pressão de memória ou
+bug a investigar, sem derrubar o servidor.

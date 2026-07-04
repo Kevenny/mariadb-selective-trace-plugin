@@ -33,8 +33,8 @@
   the hot path only takes read locks, so queries never serialize.
 */
 
-#define PLUGIN_VERSION      0x0005
-#define PLUGIN_STR_VERSION  "0.5.0"
+#define PLUGIN_VERSION      0x0006
+#define PLUGIN_STR_VERSION  "0.5.1"
 
 #include <my_global.h>
 #include <my_pthread.h>
@@ -67,6 +67,8 @@ static std::string *schemas_storage= NULL;
 static std::string *tables_storage= NULL;
 static std::string *file_path_storage= NULL;
 static int plugin_ready= 0;
+/* exceptions swallowed at the C boundaries (SHOW STATUS) */
+static ulong status_callback_errors= 0;
 
 #ifdef HAVE_PSI_INTERFACE
 static PSI_rwlock_key key_rwlock_filter;
@@ -166,6 +168,7 @@ static int check_filter_list(MYSQL_THD thd __attribute__((unused)),
                              struct st_mysql_sys_var *var,
                              void *save, struct st_mysql_value *value,
                              int is_table_list)
+try
 {
   int len= 0;
   const char *str= value->val_str(value, NULL, &len);
@@ -191,6 +194,12 @@ static int check_filter_list(MYSQL_THD thd __attribute__((unused)),
   *(const char **) save= str;
   (void) var;
   return 0;
+}
+catch (...)
+{
+  /* C boundary: fail the SET instead of letting the exception escape */
+  status_callback_errors++;
+  return 1;
 }
 
 static int check_schemas_to_log(MYSQL_THD thd, struct st_mysql_sys_var *var,
@@ -236,12 +245,20 @@ static void update_filter_list(void *var_ptr, const void *save,
 
   mysql_rwlock_wrlock(&filter_lock);
 
-  std::string *storage= is_table_list ? tables_storage : schemas_storage;
-  storage->assign(new_val);
-  *(char **) var_ptr= const_cast<char *>(storage->c_str());
+  /* the lock is C state: release it even if an allocation throws */
+  try
+  {
+    std::string *storage= is_table_list ? tables_storage : schemas_storage;
+    storage->assign(new_val);
+    *(char **) var_ptr= const_cast<char *>(storage->c_str());
 
-  (void) rebuild_rules_locked(schemas_storage->c_str(),
-                              tables_storage->c_str());
+    (void) rebuild_rules_locked(schemas_storage->c_str(),
+                                tables_storage->c_str());
+  }
+  catch (...)
+  {
+    status_callback_errors++;   /* old rules stay active */
+  }
 
   mysql_rwlock_unlock(&filter_lock);
 }
@@ -271,8 +288,16 @@ static void update_log_file_path(MYSQL_THD thd __attribute__((unused)),
   if (new_val == NULL)
     new_val= "";
 
-  file_path_storage->assign(new_val);
-  *(char **) var_ptr= const_cast<char *>(file_path_storage->c_str());
+  try
+  {
+    file_path_storage->assign(new_val);
+    *(char **) var_ptr= const_cast<char *>(file_path_storage->c_str());
+  }
+  catch (...)
+  {
+    status_callback_errors++;
+    return;                     /* keep the previous path */
+  }
 
   /* Reopen only if the writer is in use; otherwise it opens lazily. */
   if (opt_enabled && opt_output == SELECTIVE_LOG_OUTPUT_FILE)
@@ -368,6 +393,8 @@ static struct st_mysql_show_var selective_log_status[]=
     SHOW_ULONG },
   SHOW_FUNC_ENTRY("selective_log_write_failures", show_write_failures),
   SHOW_FUNC_ENTRY("selective_log_events_dropped", show_events_dropped),
+  { "selective_log_callback_errors", (char *) &status_callback_errors,
+    SHOW_ULONG },
   { 0, 0, SHOW_UNDEF }
 };
 
@@ -728,17 +755,9 @@ reset:
   st->in_statement= 0;
 }
 
-static void selective_log_notify(MYSQL_THD thd,
-                                 unsigned int event_class,
-                                 const void *event)
+static void notify_impl(MYSQL_THD thd, unsigned int event_class,
+                        const void *event)
 {
-  if (!opt_enabled || !plugin_ready || thd == NULL)
-    return;
-
-  /* Never log the internal writer's own INSERTs (self-log loop). */
-  if (selective_log::table_writer_is_self())
-    return;
-
   if (event_class == MYSQL_AUDIT_GENERAL_CLASS)
   {
     const struct mysql_event_general *ev=
@@ -754,6 +773,30 @@ static void selective_log_notify(MYSQL_THD thd,
   }
   else if (event_class == MYSQL_AUDIT_TABLE_CLASS)
     handle_table_event(thd, (const struct mysql_event_table *) event);
+}
+
+static void selective_log_notify(MYSQL_THD thd,
+                                 unsigned int event_class,
+                                 const void *event)
+{
+  if (!opt_enabled || !plugin_ready || thd == NULL)
+    return;
+
+  /* Never log the internal writer's own INSERTs (self-log loop). */
+  if (selective_log::table_writer_is_self())
+    return;
+
+  /* C boundary: no C++ exception (e.g. bad_alloc while assembling the
+     output under memory pressure) may reach the server — that would
+     abort mariadbd. Drop the event and count it instead. */
+  try
+  {
+    notify_impl(thd, event_class, event);
+  }
+  catch (...)
+  {
+    status_callback_errors++;
+  }
 }
 
 /* ------------------------------------------------------------------------
