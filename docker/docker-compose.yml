@@ -1,0 +1,58 @@
+version: "3.8"
+
+services:
+  # ---------------------------------------------------------------------
+  # Container de desenvolvimento: fonte do MariaDB + toolchain + Claude Code
+  # ---------------------------------------------------------------------
+  dev:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: mariadb-plugin-dev
+    volumes:
+      - ..:/workspace
+      - mariadb-src:/opt/mariadb-src
+      - mariadb-build:/opt/mariadb-build
+      - ccache-data:/opt/ccache
+    working_dir: /workspace
+    stdin_open: true
+    tty: true
+    environment:
+      - MARIADB_VERSION=11.4.4
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+    ports:
+      - "3306:3306"     # MariaDB (quando o mysqld de teste subir)
+      - "3307:3307"     # porta alternativa para segunda instância de teste
+    networks:
+      - plugin-dev-net
+
+  # ---------------------------------------------------------------------
+  # Container "limpo" apenas para validar o plugin compilado, simulando
+  # um ambiente de produção MariaDB 11.4.4 oficial
+  # ---------------------------------------------------------------------
+  mariadb-test:
+    image: mariadb:11.4.4
+    container_name: mariadb-plugin-test
+    environment:
+      - MARIADB_ROOT_PASSWORD=devpassword
+      - MARIADB_DATABASE=testdb
+    volumes:
+      # mariadbd não aceita subdiretório em plugin-load-add ("No paths allowed
+      # for shared library"), então o .so é montado direto no plugin_dir
+      - ../build/plugin_output/selective_log.so:/usr/lib/mysql/plugin/selective_log.so:ro
+      - ../docker/test-my.cnf:/etc/mysql/conf.d/plugin-test.cnf:ro
+    ports:
+      - "3308:3306"
+    networks:
+      - plugin-dev-net
+    profiles:
+      - test
+
+volumes:
+  mariadb-src:
+  mariadb-build:
+  ccache-data:
+
+networks:
+  plugin-dev-net:
+    driver: bridge

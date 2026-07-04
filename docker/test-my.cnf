@@ -1,0 +1,13 @@
+[mysqld]
+# O plugin declara maturity EXPERIMENTAL; o default do servidor (gamma)
+# bloquearia o load. Ambiente de teste, então liberamos.
+plugin-maturity=experimental
+plugin-load-add=selective_log.so
+
+# Configuração inicial do plugin selective_log (ver docs/ARCHITECTURE.md)
+selective_log_enabled=ON
+selective_log_log_file_path=/var/lib/mysql/selective_log.json
+selective_log_schemas_to_log=testdb
+selective_log_tables_to_log=
+
+general_log=OFF
