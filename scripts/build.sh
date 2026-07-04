@@ -74,7 +74,7 @@ build_plugin_only() {
 
 package_for_test() {
     echo ">> Empacotando plugin compilado para o container de teste"
-    local out_dir="${WORKSPACE_DIR}/build/plugin_output"
+    local out_dir="${PLUGIN_OUTPUT_DIR:-${WORKSPACE_DIR}/build/plugin_output}"
     mkdir -p "${out_dir}"
 
     local so_path

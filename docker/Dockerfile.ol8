@@ -1,0 +1,65 @@
+# Dockerfile.ol8 - Ambiente de build do plugin para Oracle Linux 8+
+#
+# Produz um selective_log.so linkado contra a glibc 2.28 do EL8, carregável
+# em MariaDB 11.4.x rodando em Oracle Linux / RHEL / Rocky / Alma 8 e 9
+# (glibc é retrocompatível: binário EL8 roda em EL9, não o contrário).
+FROM oraclelinux:8
+
+ENV MARIADB_VERSION=11.4.4
+ENV MARIADB_SRC_DIR=/opt/mariadb-src
+ENV BUILD_DIR=/opt/mariadb-build-ol8
+
+# ---------------------------------------------------------------------------
+# Dependências de build. O gcc nativo do EL8 (8.5) é antigo para o MariaDB
+# 11.4 — usamos o gcc-toolset-12. codeready_builder e EPEL fornecem as
+# -devel e o ninja/ccache.
+# ---------------------------------------------------------------------------
+RUN dnf -y install oracle-epel-release-el8 dnf-plugins-core && \
+    dnf config-manager --set-enabled ol8_codeready_builder && \
+    dnf -y install \
+        gcc-toolset-12-gcc \
+        gcc-toolset-12-gcc-c++ \
+        gcc-toolset-12-binutils \
+        cmake \
+        ninja-build \
+        ccache \
+        git \
+        bison \
+        flex \
+        ncurses-devel \
+        readline-devel \
+        openssl-devel \
+        zlib-devel \
+        libaio-devel \
+        pam-devel \
+        pcre2-devel \
+        libxml2-devel \
+        libcurl-devel \
+        libevent-devel \
+        lz4-devel \
+        libzstd-devel \
+        snappy-devel \
+        bzip2-devel \
+        xz-devel \
+        systemd-devel \
+        krb5-devel \
+        boost-devel \
+        libtirpc-devel \
+        which \
+        diffutils \
+        procps-ng \
+    && dnf clean all
+
+# gcc-toolset-12 na frente do PATH (dispensa `scl enable`)
+ENV PATH="/opt/rh/gcc-toolset-12/root/usr/bin:${PATH}"
+
+RUN useradd -u 1000 -ms /bin/bash devuser \
+    && mkdir -p ${MARIADB_SRC_DIR} ${BUILD_DIR} /opt/ccache \
+    && chown -R devuser:devuser ${MARIADB_SRC_DIR} ${BUILD_DIR} /opt/ccache
+
+WORKDIR /workspace
+USER devuser
+
+ENV CCACHE_DIR=/opt/ccache
+
+CMD ["/bin/bash"]

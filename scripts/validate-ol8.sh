@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# ---------------------------------------------------------------------------
+# validate-ol8.sh — valida o selective_log.so buildado para EL8 num
+# Oracle Linux 8 limpo com MariaDB 11.4 instalado via RPM oficial.
+#
+# Roda DENTRO de um container oraclelinux:8 (como root) com o .so montado
+# em /plugin_out:
+#   docker run --rm -i -v "<repo>/build/plugin_output-ol8:/plugin_out:ro" \
+#       oraclelinux:8 bash < scripts/validate-ol8.sh
+# ---------------------------------------------------------------------------
+set -euo pipefail
+
+echo ">> [1/4] Configurando repo MariaDB 11.4 e instalando RPMs"
+curl -LsS https://r.mariadb.com/downloads/mariadb_repo_setup \
+    | bash -s -- --mariadb-server-version=mariadb-11.4 >/dev/null
+dnf -y install MariaDB-server MariaDB-client >/dev/null
+mariadbd --version
+
+echo ">> [2/4] Instalando o plugin e inicializando o datadir"
+cp /plugin_out/selective_log.so /usr/lib64/mysql/plugin/
+mariadb-install-db --user=mysql >/dev/null
+
+echo ">> [3/4] Subindo mariadbd com o plugin"
+/usr/sbin/mariadbd --user=mysql --skip-networking \
+    --socket=/tmp/m.sock \
+    --plugin-load-add=selective_log.so \
+    --plugin-maturity=experimental \
+    --selective_log_enabled=ON \
+    --selective_log_schemas_to_log=hotdb \
+    --selective_log_log_file_path=/tmp/selective_log.json \
+    >/tmp/mariadbd.log 2>&1 &
+
+for i in $(seq 1 60); do
+    mariadb -uroot -S /tmp/m.sock -e "SELECT 1" >/dev/null 2>&1 && break
+    sleep 1
+done
+
+M="mariadb -uroot -S /tmp/m.sock"
+$M -e "SELECT VERSION() AS versao"
+$M -e "SELECT PLUGIN_NAME, PLUGIN_STATUS, PLUGIN_AUTH_VERSION
+       FROM information_schema.PLUGINS WHERE PLUGIN_NAME='selective_log'"
+
+echo ">> [4/4] Smoke test funcional"
+$M --force <<'SQL'
+CREATE DATABASE hotdb;
+CREATE DATABASE colddb;
+CREATE TABLE hotdb.t (id INT PRIMARY KEY, v VARCHAR(30));
+CREATE TABLE colddb.t (id INT PRIMARY KEY, v VARCHAR(30));
+INSERT INTO hotdb.t VALUES (1,'el8');
+SELECT * FROM hotdb.t;
+INSERT INTO colddb.t VALUES (9,'fora do filtro');
+SELECT * FROM hotdb.t JOIN colddb.t USING (id);
+SELECT * FROM hotdb.nao_existe;
+SET GLOBAL selective_log_output='TABLE';
+UPDATE hotdb.t SET v='table-mode' WHERE id=1;
+DO SLEEP(2);
+SQL
+
+echo "--- arquivo JSON (modo FILE) ---"
+cat /tmp/selective_log.json
+echo "--- tabela mysql.selective_log_events (modo TABLE) ---"
+$M -e "SELECT tables_involved, command, error_code, LEFT(query,50) AS q
+       FROM mysql.selective_log_events"
+echo "--- UNINSTALL/INSTALL ---"
+$M -e "UNINSTALL PLUGIN selective_log;
+       INSTALL PLUGIN selective_log SONAME 'selective_log.so';
+       SELECT 'servidor vivo' AS status"
+mariadb-admin -uroot -S /tmp/m.sock shutdown
+echo ">> VALIDACAO OL8 CONCLUIDA"

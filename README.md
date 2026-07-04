@@ -101,6 +101,30 @@ docker exec -i mariadb-plugin-test bash < scripts/benchmark.sh
 docker exec -i mariadb-plugin-dev  bash < scripts/valgrind-test.sh
 ```
 
+### 6. Build para Oracle Linux / RHEL 8+
+
+O `.so` do container `dev` (Ubuntu 22.04) exige glibc ≥ 2.35 e não carrega em
+EL8/EL9. Use o ambiente `dev-ol8` (base `oraclelinux:8` + gcc-toolset-12),
+que gera um binário exigindo apenas GLIBC_2.17 — carregável em EL8, EL9 e
+mais novos:
+
+```bash
+docker compose -f docker/docker-compose.yml --profile ol8 up -d --build dev-ol8
+docker exec mariadb-plugin-dev-ol8 bash -lc 'cd /workspace && ./scripts/build.sh full && ./scripts/build.sh --package'
+# saída: build/plugin_output-ol8/selective_log.so
+# validação num OL8 limpo com MariaDB 11.4 instalado via RPM oficial:
+docker run --rm -i -v "$PWD/build/plugin_output-ol8:/plugin_out:ro" \
+    oraclelinux:8 bash < scripts/validate-ol8.sh
+```
+
+Validado contra MariaDB 11.4.12 (RPMs oficiais) em Oracle Linux 8 — o plugin
+compilado contra o fonte 11.4.4 é compatível com toda a série 11.4.x.
+
+**Windows**: não suportado nesta versão — `log_writer_table` usa pthread,
+relógios POSIX e `__attribute__((constructor))`. O porte é viável
+(std::thread/std::chrono + DllMain, como o server_audit faz), mas exige
+toolchain MSVC para compilar a árvore do MariaDB no Windows.
+
 ## Licença
 
 GPLv2, compatível com a licença do MariaDB Server.

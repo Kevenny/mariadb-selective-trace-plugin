@@ -6,6 +6,35 @@ que tocam schemas/tabelas configurados — uma alternativa de baixo overhead ao
 
 ---
 
+## 0. Plataformas suportadas
+
+O plugin é um binário nativo — use o `.so` compilado para a plataforma do
+servidor:
+
+| Plataforma do servidor MariaDB | Build |
+|---|---|
+| Ubuntu 22.04+/Debian (glibc ≥ 2.35) | `build/plugin_output/selective_log.so` (container `dev`) |
+| Oracle Linux / RHEL / Rocky / Alma **8 e 9** | `build/plugin_output-ol8/selective_log.so` (container `dev-ol8`, glibc ≥ 2.17) |
+| Windows | não suportado nesta versão (código usa POSIX; porte viável, ver README) |
+
+O build EL8 requer só GLIBC_2.17+, então carrega em EL8, EL9 e distros mais
+novas. Compatível com qualquer servidor MariaDB **11.4.x** (validado contra
+11.4.4 compilado e 11.4.12 dos RPMs oficiais em OL8). Para outra série
+(10.11, 11.8...), recompile contra o fonte da série correspondente.
+
+Como gerar o build EL8:
+
+```bash
+docker compose -f docker/docker-compose.yml --profile ol8 up -d --build dev-ol8
+docker exec mariadb-plugin-dev-ol8 bash -lc 'cd /workspace && ./scripts/build.sh full && ./scripts/build.sh --package'
+# valida num OL8 limpo com MariaDB 11.4 via RPM oficial:
+docker run --rm -i -v "$PWD/build/plugin_output-ol8:/plugin_out:ro" \
+    oraclelinux:8 bash < scripts/validate-ol8.sh
+```
+
+No servidor de destino (OL8+ com MariaDB via RPM), o `plugin_dir` é
+`/usr/lib64/mysql/plugin/` — copie o `.so` para lá.
+
 ## 1. Instalação
 
 Copie `selective_log.so` para o `plugin_dir` do servidor (confira com

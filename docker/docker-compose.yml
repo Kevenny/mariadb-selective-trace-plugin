@@ -27,6 +27,34 @@ services:
       - plugin-dev-net
 
   # ---------------------------------------------------------------------
+  # Build para Oracle Linux / RHEL 8+ (glibc 2.28): gera o .so carregável
+  # em MariaDB 11.4.x instalado via RPM em EL8/EL9.
+  #   docker compose -f docker/docker-compose.yml --profile ol8 up -d dev-ol8
+  #   docker exec mariadb-plugin-dev-ol8 bash -lc 'cd /workspace && ./scripts/build.sh full'
+  # ---------------------------------------------------------------------
+  dev-ol8:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.ol8
+    container_name: mariadb-plugin-dev-ol8
+    volumes:
+      - ..:/workspace
+      - mariadb-src:/opt/mariadb-src
+      - mariadb-build-ol8:/opt/mariadb-build-ol8
+      - ccache-ol8:/opt/ccache
+    working_dir: /workspace
+    stdin_open: true
+    tty: true
+    environment:
+      - MARIADB_VERSION=11.4.4
+      - BUILD_DIR=/opt/mariadb-build-ol8
+      - PLUGIN_OUTPUT_DIR=/workspace/build/plugin_output-ol8
+    networks:
+      - plugin-dev-net
+    profiles:
+      - ol8
+
+  # ---------------------------------------------------------------------
   # Container "limpo" apenas para validar o plugin compilado, simulando
   # um ambiente de produção MariaDB 11.4.4 oficial
   # ---------------------------------------------------------------------
@@ -51,7 +79,9 @@ services:
 volumes:
   mariadb-src:
   mariadb-build:
+  mariadb-build-ol8:
   ccache-data:
+  ccache-ol8:
 
 networks:
   plugin-dev-net:

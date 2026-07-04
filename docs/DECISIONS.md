@@ -185,3 +185,26 @@ Ajustes motivados por um INSERT via DBeaver logado com `command=OTHER`:
 4. **Truncamento visível**: buffer de tabelas por conexão subiu para ~3,9 KB
    e o estouro é sinalizado (`"tables_truncated":true` no JSON, `,...` na
    tabela) em vez de silencioso.
+
+## D14. Build multi-plataforma: ambiente dedicado EL8 (Oracle Linux 8+)
+
+O `.so` é binário nativo: o build do container `dev` (Ubuntu 22.04) exige
+glibc ≥ 2.35 e não carrega em EL8 (glibc 2.28). Em vez de tentar um binário
+"universal", o projeto ganhou um segundo ambiente de build
+(`docker/Dockerfile.ol8`, serviço `dev-ol8`, volumes de build/ccache
+separados, mesmo volume de fonte): base `oraclelinux:8` com gcc-toolset-12
+(o gcc 8.5 nativo do EL8 é antigo demais para o MariaDB 11.4). O binário
+resultante exige apenas GLIBC_2.17 (verificado com `objdump -T`), cobrindo
+EL8, EL9 e distros mais novas.
+
+Validação real (`scripts/validate-ol8.sh`): container `oraclelinux:8` limpo,
+MariaDB **11.4.12** instalado via RPM oficial (mariadb.org), plugin ACTIVE e
+smoke test completo (FILE, TABLE, JOIN cross-schema, UNINSTALL/INSTALL) —
+confirmando também compatibilidade dentro da série 11.4.x (build contra
+11.4.4 rodando no 11.4.12).
+
+Windows ficou fora do escopo desta versão: `log_writer_table` usa pthread,
+os relógios são POSIX (`clock_gettime`/`gettimeofday`) e o blob da THDVAR é
+preenchido em `__attribute__((constructor))`. Porte mapeado (std::thread/
+std::chrono/DllMain, padrão do server_audit), mas exige toolchain MSVC para
+compilar a árvore do MariaDB.
