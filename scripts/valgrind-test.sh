@@ -84,6 +84,13 @@ SET GLOBAL selective_log_log_file_path='/tmp/vg_selective2.json';
 -- erro de SQL (evento com error_code)
 SELECT * FROM vg_hot.nao_existe;
 
+-- mascaramento de credenciais (aloca a query saneada)
+SET GLOBAL selective_log_schemas_to_log='vg_hot,mysql';
+CREATE USER IF NOT EXISTS vguser@localhost IDENTIFIED BY 'vgsecret';
+SET PASSWORD FOR vguser@localhost = PASSWORD('vgsecret2');
+DROP USER IF EXISTS vguser@localhost;
+SET GLOBAL selective_log_schemas_to_log='vg_hot';
+
 -- modo TABLE (thread interna + criação lazy da tabela)
 SET GLOBAL selective_log_output='TABLE';
 INSERT INTO vg_hot.t (v) VALUES ('table-mode');

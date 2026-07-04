@@ -18,6 +18,9 @@ cenário sintético) — ver [docs/BENCHMARKS.md](./docs/BENCHMARKS.md).
 > ⚖️ Decisões técnicas (C++ vs C, eventos usados, anti-loop do modo TABLE,
 > lições de crashes reais): [`docs/DECISIONS.md`](./docs/DECISIONS.md)
 >
+> 🔒 Modelo de ameaças, bateria adversarial e hardening SELinux/OL9:
+> [`docs/SECURITY.md`](./docs/SECURITY.md)
+>
 > 📋 Especificação original usada com o Claude Code: [`CLAUDE.md`](./CLAUDE.md)
 
 ## TL;DR de uso

@@ -33,8 +33,8 @@
   the hot path only takes read locks, so queries never serialize.
 */
 
-#define PLUGIN_VERSION      0x0006
-#define PLUGIN_STR_VERSION  "0.5.1"
+#define PLUGIN_VERSION      0x0007
+#define PLUGIN_STR_VERSION  "0.6.0"
 
 #include <my_global.h>
 #include <my_pthread.h>
@@ -154,6 +154,7 @@ static char *opt_tables_to_log= NULL;
 static ulong opt_output= 0;
 static char *opt_log_file_path= NULL;
 static uint opt_min_duration_ms= 0;
+static my_bool opt_mask_passwords= TRUE;
 
 #define SELECTIVE_LOG_OUTPUT_FILE  0
 #define SELECTIVE_LOG_OUTPUT_TABLE 1
@@ -339,6 +340,12 @@ static MYSQL_SYSVAR_UINT(min_duration_ms, opt_min_duration_ms,
   "Only log queries slower than this many milliseconds. 0 logs all queries.",
   NULL, NULL, 0, 0, 0x7FFFFFFF, 1);
 
+static MYSQL_SYSVAR_BOOL(mask_passwords, opt_mask_passwords,
+  PLUGIN_VAR_OPCMDARG,
+  "Replace credential literals (IDENTIFIED BY, PASSWORD(), SET PASSWORD)"
+  " with *** before logging. On by default.",
+  NULL, NULL, TRUE);
+
 static struct st_mysql_sys_var *selective_log_sysvars[]=
 {
   MYSQL_SYSVAR(enabled),
@@ -347,6 +354,7 @@ static struct st_mysql_sys_var *selective_log_sysvars[]=
   MYSQL_SYSVAR(output),
   MYSQL_SYSVAR(log_file_path),
   MYSQL_SYSVAR(min_duration_ms),
+  MYSQL_SYSVAR(mask_passwords),
   MYSQL_SYSVAR(state),
   NULL
 };
@@ -636,6 +644,17 @@ static void handle_status_event(MYSQL_THD thd,
     parse_user_host(&user_host, event->general_user,
                     event->general_user_length);
 
+    /* Credential masking: log the sanitized query text in both modes. */
+    const char *qtext= event->general_query;
+    size_t qlen= event->general_query_length;
+    std::string masked;
+    if (opt_mask_passwords &&
+        selective_log::mask_secrets(qtext, qlen, &masked))
+    {
+      qtext= masked.data();
+      qlen= masked.size();
+    }
+
     if (opt_output == SELECTIVE_LOG_OUTPUT_FILE)
     {
       std::string line;
@@ -691,8 +710,7 @@ static void handle_status_event(MYSQL_THD thd,
       snprintf(numbuf, sizeof(numbuf), ",\"error_code\":%d,\"query\":\"",
                event->general_error_code);
       line.append(numbuf);
-      selective_log::json_escape_append(&line, event->general_query,
-                                        event->general_query_length);
+      selective_log::json_escape_append(&line, qtext, qlen);
       line.append("\"}\n");
 
       if (selective_log::file_writer_write(line.data(), line.size(),
@@ -737,8 +755,7 @@ static void handle_status_event(MYSQL_THD thd,
 
       snprintf(numbuf, sizeof(numbuf), ",%d,'", event->general_error_code);
       sql.append(numbuf);
-      selective_log::sql_escape_append(&sql, event->general_query,
-                                       event->general_query_length);
+      selective_log::sql_escape_append(&sql, qtext, qlen);
       sql.append("')");
 
       if (selective_log::table_writer_enqueue(&sql))

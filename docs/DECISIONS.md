@@ -247,3 +247,26 @@ memória, um `bad_alloc` atravessando a fronteira `extern "C"` viraria
 Exceções engolidas são contadas em `Selective_log_callback_errors`
 (SHOW GLOBAL STATUS) — valor diferente de zero indica pressão de memória ou
 bug a investigar, sem derrubar o servidor.
+
+## D17. Segurança (v0.6.0): correções da bateria adversarial no OL9
+
+Validação de segurança (scripts/security-test.sh) num oraclelinux:9 com
+MariaDB 11.4.12 via RPM apontou 6/7 ok e um achado; corrigidos:
+
+1. **Mascaramento de credenciais** (achado): o plugin loga o texto completo
+   da query, expondo senhas de DCL (`IDENTIFIED BY`, `SET PASSWORD`,
+   `PASSWORD()`, `IDENTIFIED WITH ... AS`). `mask_secrets()` (no
+   filter_engine, testável) substitui esses literais por `***`, com
+   fronteira de palavra (não afeta coluna `password_hash` nem
+   `'my password'` em INSERT comum). Controlado por
+   `selective_log_mask_passwords` (default ON).
+2. **sql_mode do writer** (defesa em profundidade): o escaping do INSERT no
+   modo TABLE usa backslashes, inválido sob `NO_BACKSLASH_ESCAPES`. A
+   conexão interna do writer passou a fixar `SET SESSION sql_mode=''` ao
+   conectar, tornando o escaping independente do sql_mode global — fecha um
+   vetor teórico de injeção de SQL na tabela de log.
+
+Injeção de SQL (modo default), injeção de JSON/nova-linha e falha graciosa
+de path já passavam. SELinux não é exercido no container de teste (kernel
+sem SELinux); o procedimento de rótulo do .so e do path de log está em
+docs/SECURITY.md para o host OL9 real com enforcing.

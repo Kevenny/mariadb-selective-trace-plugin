@@ -138,6 +138,17 @@ unsigned command_bit(const char *cmd);
 void extract_command(const char *query, size_t query_len,
                      char *buf, size_t buf_size);
 
+/*
+  Copy query into *out, replacing credential literals with ***. Covers the
+  authentication clauses of DCL: IDENTIFIED BY '...', IDENTIFIED BY
+  PASSWORD '...', IDENTIFIED [WITH plugin] {BY|AS|USING} '...', PASSWORD(...)
+  / PASSWORD '...', and SET PASSWORD ... = '...' / = PASSWORD('...').
+  Quoted strings ('...' and "...") after those keywords have their body
+  replaced. Case-insensitive; keyword matching respects word boundaries.
+  Returns true if anything was masked (so callers can note it).
+*/
+bool mask_secrets(const char *query, size_t query_len, std::string *out);
+
 } /* namespace selective_log */
 
 #endif /* SELECTIVE_LOG_FILTER_ENGINE_H */

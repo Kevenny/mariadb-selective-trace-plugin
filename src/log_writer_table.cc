@@ -93,6 +93,21 @@ static bool ensure_conn()
     conn= NULL;
     return false;
   }
+  /*
+    Pin a known sql_mode on the writer session. sql_escape_append() escapes
+    with backslashes, which is only valid when NO_BACKSLASH_ESCAPES is off.
+    Without this, a server running with NO_BACKSLASH_ESCAPES would make our
+    escaping ineffective — a "'" in the query text could break out of the
+    INSERT string literal (SQL injection into the log table). We also drop
+    STRICT so a single oversized field never aborts the row insert.
+  */
+  {
+    static const char set_mode[]= "SET SESSION sql_mode=''";
+    if (mysql_real_query(conn, set_mode,
+                         (unsigned long) (sizeof(set_mode) - 1)))
+      fprintf(stderr, "selective_log: could not set writer sql_mode: %s\n",
+              mysql_error(conn));
+  }
   if (mysql_real_query(conn, CREATE_LOG_TABLE_SQL,
                        (unsigned long) (sizeof(CREATE_LOG_TABLE_SQL) - 1)))
     fprintf(stderr, "selective_log: could not create " LOG_TABLE_FQN ": %s\n",

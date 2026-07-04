@@ -244,6 +244,48 @@ static void test_extract_command()
   CHECK(cmd("   \n\t ") == "OTHER");
 }
 
+static std::string mask(const char *q)
+{
+  std::string out;
+  selective_log::mask_secrets(q, std::strlen(q), &out);
+  return out;
+}
+
+static void test_mask_secrets()
+{
+  /* nada a mascarar: query devolvida idêntica */
+  CHECK(mask("SELECT * FROM t WHERE v='hello'") ==
+        "SELECT * FROM t WHERE v='hello'");
+  CHECK(mask("INSERT INTO t VALUES ('data')") ==
+        "INSERT INTO t VALUES ('data')");
+
+  /* DCL: senha vira *** preservando aspas */
+  CHECK(mask("CREATE USER x@localhost IDENTIFIED BY 'SuperSecret123'") ==
+        "CREATE USER x@localhost IDENTIFIED BY '***'");
+  CHECK(mask("SET PASSWORD FOR x = PASSWORD('AnotherSecret456')") ==
+        "SET PASSWORD FOR x = PASSWORD('***')");
+  CHECK(mask("SET PASSWORD = 'plain'") == "SET PASSWORD = '***'");
+  CHECK(mask("ALTER USER x IDENTIFIED BY \"double\"") ==
+        "ALTER USER x IDENTIFIED BY \"***\"");
+  CHECK(mask("GRANT ALL ON *.* TO x IDENTIFIED BY 'p'") ==
+        "GRANT ALL ON *.* TO x IDENTIFIED BY '***'");
+
+  /* IDENTIFIED WITH plugin AS/BY '<hash>' */
+  CHECK(mask("CREATE USER x IDENTIFIED WITH ed25519 AS 'HASHVAL'") ==
+        "CREATE USER x IDENTIFIED WITH ed25519 AS '***'");
+  CHECK(mask("CREATE USER x IDENTIFIED BY PASSWORD 'HASHVAL'") ==
+        "CREATE USER x IDENTIFIED BY PASSWORD '***'");
+
+  /* case-insensitive e aspas escapadas dentro do segredo */
+  CHECK(mask("create user x identified by 'a\\'b'") ==
+        "create user x identified by '***'");
+
+  /* não confundir substrings: coluna chamada password_hash não dispara
+     mascaramento indevido do valor de outra coluna */
+  CHECK(mask("UPDATE t SET note='my password is safe' WHERE id=1") ==
+        "UPDATE t SET note='my password is safe' WHERE id=1");
+}
+
 static void test_match_null_safety()
 {
   FilterRules r;
@@ -264,6 +306,7 @@ int main()
   test_invalid_tokens();
   test_command_qualifiers();
   test_extract_command();
+  test_mask_secrets();
   test_match_null_safety();
 
   if (failures)

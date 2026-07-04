@@ -398,4 +398,130 @@ void extract_command(const char *query, size_t query_len,
   }
 }
 
+/* ---- secret masking ------------------------------------------------- */
+
+static char up(char c)
+{
+  return (c >= 'a' && c <= 'z') ? (char) (c - 'a' + 'A') : c;
+}
+
+static bool is_ident_char(char c)
+{
+  return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+         (c >= '0' && c <= '9') || c == '_';
+}
+
+/* Case-insensitive keyword match at q[i], honoring word boundaries. */
+static bool kw_at(const char *q, size_t len, size_t i, const char *kw)
+{
+  size_t k= 0;
+  while (kw[k])
+  {
+    if (i + k >= len || up(q[i + k]) != kw[k])
+      return false;
+    k++;
+  }
+  /* boundary before */
+  if (i > 0 && is_ident_char(q[i - 1]))
+    return false;
+  /* boundary after */
+  if (i + k < len && is_ident_char(q[i + k]))
+    return false;
+  return true;
+}
+
+/*
+  From index i (just past a trigger keyword), skip spaces and an optional
+  leading "password"/"as"/"by"/"using" chain, then if a quoted string
+  follows, append *** in its place to out and return the index right after
+  the closing quote. Returns i unchanged (nothing appended) if no quote.
+*/
+static size_t mask_following_quote(const char *q, size_t len, size_t i,
+                                   std::string *out, bool *masked)
+{
+  while (i < len && (q[i] == ' ' || q[i] == '\t' || q[i] == '\n' ||
+                     q[i] == '\r' || q[i] == '(' || q[i] == '='))
+  {
+    out->push_back(q[i]);
+    i++;
+  }
+  if (i >= len || (q[i] != '\'' && q[i] != '"'))
+    return i;
+
+  char quote= q[i];
+  out->push_back(quote);
+  out->append("***");
+  i++;                                  /* opening quote consumed */
+  while (i < len)
+  {
+    if (q[i] == '\\' && i + 1 < len)    /* skip escaped char */
+    {
+      i+= 2;
+      continue;
+    }
+    if (q[i] == quote)
+      break;
+    i++;
+  }
+  if (i < len)                          /* closing quote */
+  {
+    out->push_back(quote);
+    i++;
+  }
+  *masked= true;
+  return i;
+}
+
+bool mask_secrets(const char *query, size_t query_len, std::string *out)
+{
+  bool masked= false;
+  out->clear();
+  out->reserve(query_len + 8);
+
+  size_t i= 0;
+  while (i < query_len)
+  {
+    /* IDENTIFIED [WITH x] {BY|AS|USING} [PASSWORD] '<secret>' */
+    if (kw_at(query, query_len, i, "IDENTIFIED"))
+    {
+      out->append(query + i, 10);
+      i+= 10;
+      /* copy up to the connector keyword (BY/AS/USING), passing over an
+         optional "WITH <plugin>" */
+      while (i < query_len)
+      {
+        if (kw_at(query, query_len, i, "BY"))       { out->append(query+i,2); i+=2; break; }
+        if (kw_at(query, query_len, i, "AS"))       { out->append(query+i,2); i+=2; break; }
+        if (kw_at(query, query_len, i, "USING"))    { out->append(query+i,5); i+=5; break; }
+        if (query[i] == '\'' || query[i] == '"')    break; /* direct literal */
+        out->push_back(query[i]);
+        i++;
+      }
+      /* optional PASSWORD keyword before the literal */
+      size_t j= i;
+      while (j < query_len && (query[j]==' '||query[j]=='\t'||query[j]=='\n'||query[j]=='\r'))
+        j++;
+      if (kw_at(query, query_len, j, "PASSWORD"))
+      {
+        out->append(query + i, j - i);
+        out->append(query + j, 8);
+        i= j + 8;
+      }
+      i= mask_following_quote(query, query_len, i, out, &masked);
+      continue;
+    }
+    /* PASSWORD ( ... )  or  PASSWORD '<secret>'  (SET PASSWORD, etc.) */
+    if (kw_at(query, query_len, i, "PASSWORD"))
+    {
+      out->append(query + i, 8);
+      i+= 8;
+      i= mask_following_quote(query, query_len, i, out, &masked);
+      continue;
+    }
+    out->push_back(query[i]);
+    i++;
+  }
+  return masked;
+}
+
 } /* namespace selective_log */

@@ -84,6 +84,7 @@ Todas dinâmicas (`SET GLOBAL`), sem restart:
 | `selective_log_output` | ENUM | `FILE` | `FILE` (JSON por linha) ou `TABLE` (`mysql.selective_log_events`) |
 | `selective_log_log_file_path` | VARCHAR | `selective_log.json` | Arquivo de log no modo FILE (relativo = datadir) |
 | `selective_log_min_duration_ms` | INT | `0` | Só loga queries mais lentas que N ms (0 = todas) |
+| `selective_log_mask_passwords` | BOOL | `ON` | Substitui senhas de DCL (`IDENTIFIED BY`, `SET PASSWORD`, `PASSWORD()`) por `***` antes de logar |
 
 ### Filtro por tipo de comando (por entrada)
 
