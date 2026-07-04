@@ -167,6 +167,42 @@ static void test_invalid_tokens()
   CHECK(untouched.schemas.size() == 1);  /* still the old contents */
 }
 
+static std::string cmd(const char *q)
+{
+  char buf[24];
+  selective_log::extract_command(q, std::strlen(q), buf, sizeof(buf));
+  return std::string(buf);
+}
+
+static void test_extract_command()
+{
+  CHECK(cmd("SELECT 1") == "SELECT");
+  CHECK(cmd("  insert into t values (1)") == "INSERT");
+  CHECK(cmd("(SELECT 1) UNION (SELECT 2)") == "SELECT");
+  CHECK(cmd("WITH cte AS (SELECT 1) SELECT * FROM cte") == "WITH");
+
+  /* comentários de linha "--" (caso DBeaver: comentário anexado ao stmt) */
+  CHECK(cmd("-- 3. Gerar eventos\nINSERT INTO testdb.t1 VALUES (1,'x')")
+        == "INSERT");
+  CHECK(cmd("--\nUPDATE t SET v=1") == "UPDATE");
+  CHECK(cmd("-- so comentario") == "OTHER");
+  /* "--x" sem espaço não é comentário em MariaDB: vira token */
+  CHECK(cmd("--x") == "OTHER");
+
+  /* comentários "#" */
+  CHECK(cmd("# cabecalho\n# outro\ndelete from t") == "DELETE");
+
+  /* comentários de bloco e executáveis */
+  CHECK(cmd("/* c1 */ /* c2 */ REPLACE INTO t VALUES (1)") == "REPLACE");
+  CHECK(cmd("/*!40000 ALTER TABLE t DISABLE KEYS */") == "ALTER");
+  CHECK(cmd("/*M!100400 CREATE TABLE x (a int) */") == "CREATE");
+
+  /* misturas */
+  CHECK(cmd(" -- a\n /* b */ # c\n\tCALL proc(1)") == "CALL");
+  CHECK(cmd("") == "OTHER");
+  CHECK(cmd("   \n\t ") == "OTHER");
+}
+
 static void test_match_null_safety()
 {
   FilterRules r;
@@ -185,6 +221,7 @@ int main()
   test_table_filter_cross_schema();
   test_wildcard();
   test_invalid_tokens();
+  test_extract_command();
   test_match_null_safety();
 
   if (failures)

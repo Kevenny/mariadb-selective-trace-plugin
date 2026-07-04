@@ -77,6 +77,17 @@ bool match_schema(const FilterRules &rules, const char *db, size_t db_len);
 bool match_table(const FilterRules &rules, const char *db, size_t db_len,
                  const char *table, size_t table_len);
 
+/*
+  Extract the first SQL keyword of query, uppercased ("SELECT", "INSERT",
+  "WITH", ...), skipping leading whitespace, parentheses and comments of
+  all three SQL flavors: block comments, executable comments
+  ("slash-star-bang NNNNN" — the content IS the statement), "-- " line
+  comments and "#" line comments. Writes "OTHER" when no keyword is found.
+  buf receives at most buf_size bytes including the terminating NUL.
+*/
+void extract_command(const char *query, size_t query_len,
+                     char *buf, size_t buf_size);
+
 } /* namespace selective_log */
 
 #endif /* SELECTIVE_LOG_FILTER_ENGINE_H */

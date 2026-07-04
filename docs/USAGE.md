@@ -113,8 +113,21 @@ Campos:
 | `query` | Texto completo da query |
 
 Notas:
-- `tables` pode incluir tabelas internas tocadas pelo mesmo statement (ex.:
-  `mysql.column_stats` quando o EITS atualiza estatísticas num INSERT).
+- Tabelas internas de bookkeeping de estatísticas (`mysql.table_stats`,
+  `mysql.column_stats`, `mysql.index_stats`, `mysql.innodb_table_stats`,
+  `mysql.innodb_index_stats`) são tocadas como efeito colateral de DML comum
+  e **não** entram em `tables` — a menos que estejam explicitamente em
+  `selective_log_tables_to_log`.
+- `command` ignora comentários iniciais de todos os sabores (`-- `, `#`,
+  `/* */`, `/*! */`, `/*M! */`) e parênteses — um `INSERT` enviado com
+  comentário anexado (comportamento padrão do DBeaver) classifica como
+  `INSERT`. O campo `query` preserva o texto exato recebido, comentários
+  incluídos (fidelidade de auditoria, como o general_log).
+- Se um statement tocar tabelas demais para o buffer por conexão (~3,9 KB de
+  nomes), o JSON ganha `"tables_truncated":true` (na tabela de log, a lista
+  termina em `,...`).
+- Statements dentro de stored procedures/functions geram eventos próprios
+  (um por sub-statement, com suas tabelas), além do evento do `CALL`.
 - O arquivo não tem rotação por tamanho — use logrotate/Fluentd/Filebeat.
 - O caminho é reaberto automaticamente ao mudar
   `selective_log_log_file_path`.

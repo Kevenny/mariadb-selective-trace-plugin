@@ -15,6 +15,8 @@
 
 #include "filter_engine.h"
 
+#include <cstring>
+
 namespace selective_log {
 
 static inline char ascii_lower(char c)
@@ -195,6 +197,85 @@ bool match_table(const FilterRules &rules, const char *db, size_t db_len,
     if (ci_eq_qualified(rules.tables[i], db, db_len, table, table_len))
       return true;
   return false;
+}
+
+void extract_command(const char *query, size_t query_len,
+                     char *buf, size_t buf_size)
+{
+  const char *p= query;
+  const char *end= query + query_len;
+
+  if (buf_size == 0)
+    return;
+
+  /* skip whitespace, parens and every comment flavor, repeatedly */
+  for (;;)
+  {
+    if (p < end && (is_space(*p) || *p == '('))
+    {
+      p++;
+      continue;
+    }
+    if (p + 1 < end && p[0] == '/' && p[1] == '*')
+    {
+      /* executable comments — "!" (MySQL/MariaDB) and "M!" (MariaDB-only):
+         skip the marker and version digits, the content is the statement */
+      if (p + 2 < end && p[2] == '!')
+      {
+        p+= 3;
+        while (p < end && *p >= '0' && *p <= '9')
+          p++;
+        continue;
+      }
+      if (p + 3 < end && p[2] == 'M' && p[3] == '!')
+      {
+        p+= 4;
+        while (p < end && *p >= '0' && *p <= '9')
+          p++;
+        continue;
+      }
+      p+= 2;
+      while (p + 1 < end && !(p[0] == '*' && p[1] == '/'))
+        p++;
+      p= (p + 1 < end) ? p + 2 : end;
+      continue;
+    }
+    if (p + 1 < end && p[0] == '-' && p[1] == '-' &&
+        (p + 2 == end || is_space(p[2])))
+    {
+      while (p < end && *p != '\n')
+        p++;
+      continue;
+    }
+    if (p < end && *p == '#')
+    {
+      while (p < end && *p != '\n')
+        p++;
+      continue;
+    }
+    break;
+  }
+
+  size_t n= 0;
+  while (p < end && n + 1 < buf_size && n < 16)
+  {
+    char c= *p;
+    if (c >= 'a' && c <= 'z')
+      c= (char) (c - 'a' + 'A');
+    else if (!(c >= 'A' && c <= 'Z') && !(c >= '0' && c <= '9') && c != '_')
+      break;
+    buf[n++]= c;
+    p++;
+  }
+  buf[n]= 0;
+  if (n == 0)
+  {
+    const char other[]= "OTHER";
+    size_t m= sizeof(other) - 1 < buf_size - 1 ? sizeof(other) - 1
+                                               : buf_size - 1;
+    memcpy(buf, other, m);
+    buf[m]= 0;
+  }
 }
 
 } /* namespace selective_log */

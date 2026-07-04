@@ -33,8 +33,8 @@
   the hot path only takes read locks, so queries never serialize.
 */
 
-#define PLUGIN_VERSION      0x0003
-#define PLUGIN_STR_VERSION  "0.3.0"
+#define PLUGIN_VERSION      0x0004
+#define PLUGIN_STR_VERSION  "0.4.0"
 
 #include <my_global.h>
 #include <my_pthread.h>
@@ -88,8 +88,8 @@ static PSI_rwlock_info rwlock_key_list[]=
    detects the pristine 'O'-filled copy and triggers initialization.
    ------------------------------------------------------------------------ */
 
-#define STATE_MAGIC 0x53454C31          /* "SEL1" */
-#define STATE_TABLES_BUF 1536
+#define STATE_MAGIC 0x53454C32          /* "SEL2" */
+#define STATE_TABLES_BUF 3968
 
 struct StatementState
 {
@@ -97,9 +97,11 @@ struct StatementState
   unsigned long long query_id;
   unsigned long long start_ns;          /* CLOCK_MONOTONIC at dispatch     */
   int have_start;                       /* start_ns valid for this stmt    */
+  int in_statement;                     /* between GENERAL_LOG and STATUS  */
   int matched;                          /* some table matched the filter   */
+  int tables_truncated;                 /* tables[] overflowed             */
   unsigned int tables_len;
-  char tables[STATE_TABLES_BUF];        /* "db.tbl,db.tbl,..." (truncated) */
+  char tables[STATE_TABLES_BUF];        /* "db.tbl,db.tbl,..."             */
 };
 
 /*
@@ -412,46 +414,21 @@ static void parse_user_host(std::string *out,
   out->append(host_begin, (size_t)(host_end - host_begin));
 }
 
-/* First SQL keyword of the query, uppercased ("SELECT", "INSERT", ...). */
+/* First SQL keyword of the query — comment/paren-aware (filter_engine). */
 static void append_command(std::string *out,
                            const char *query, unsigned int query_len)
 {
-  const char *p= query;
-  const char *end= query + query_len;
-
-  for (;;)
-  {
-    while (p < end && (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n' ||
-                       *p == '('))
-      p++;
-    if (p + 1 < end && p[0] == '/' && p[1] == '*')     /* comment */
-    {
-      p+= 2;
-      while (p + 1 < end && !(p[0] == '*' && p[1] == '/'))
-        p++;
-      p= (p + 1 < end) ? p + 2 : end;
-      continue;
-    }
-    break;
-  }
-
-  size_t n= 0;
-  while (p < end && n < 16)
-  {
-    char c= *p;
-    if (c >= 'a' && c <= 'z')
-      c= (char) (c - 'a' + 'A');
-    else if (!(c >= 'A' && c <= 'Z') && !(c >= '0' && c <= '9') && c != '_')
-      break;
-    out->push_back(c);
-    p++;
-    n++;
-  }
-  if (n == 0)
-    out->append("OTHER");
+  char buf[24];
+  selective_log::extract_command(query, query_len, buf, sizeof(buf));
+  out->append(buf);
 }
 
-/* Reset per-statement fields when a new query_id shows up. */
+/*
+  Reset per-statement fields. Runs at every GENERAL_LOG (dispatch start),
+  so a statement accumulates ALL its table events until GENERAL_STATUS —
+  including sub-statements of stored routines, whose query_id advances
+  past the id of the CALL itself.
+*/
 static void state_begin_statement(StatementState *st,
                                   unsigned long long query_id,
                                   int with_start)
@@ -459,8 +436,34 @@ static void state_begin_statement(StatementState *st,
   st->query_id= query_id;
   st->matched= 0;
   st->tables_len= 0;
+  st->tables_truncated= 0;
+  st->in_statement= 1;
   st->have_start= with_start;
   st->start_ns= with_start ? now_ns() : 0;
+}
+
+/*
+  Server-internal bookkeeping tables (engine-independent statistics) get
+  locked as a side effect of ordinary DML and are not part of the user's
+  query. They are recorded/matched only when explicitly listed in
+  selective_log_tables_to_log.
+*/
+static bool is_internal_stats_table(const char *db, size_t db_len,
+                                    const char *tbl, size_t tbl_len)
+{
+  static const struct { const char *name; size_t len; } stats_tables[]=
+  {
+    { "table_stats", 11 }, { "column_stats", 12 }, { "index_stats", 11 },
+    { "innodb_table_stats", 18 }, { "innodb_index_stats", 18 }
+  };
+
+  if (db_len != 5 || strncasecmp(db, "mysql", 5) != 0)
+    return false;
+  for (size_t i= 0; i < array_elements(stats_tables); i++)
+    if (tbl_len == stats_tables[i].len &&
+        strncasecmp(tbl, stats_tables[i].name, tbl_len) == 0)
+      return true;
+  return false;
 }
 
 static void state_add_table(StatementState *st,
@@ -469,7 +472,10 @@ static void state_add_table(StatementState *st,
 {
   size_t need= db_len + 1 + tbl_len;
   if (need == 0 || need >= sizeof(st->tables))
+  {
+    st->tables_truncated= 1;
     return;
+  }
 
   /* dedupe: same table locked more than once in a statement */
   if (st->tables_len > 0)
@@ -494,7 +500,10 @@ static void state_add_table(StatementState *st,
   }
 
   if (st->tables_len + (st->tables_len ? 1 : 0) + need >= sizeof(st->tables))
-    return;                                   /* full: drop extra tables */
+  {
+    st->tables_truncated= 1;                  /* full: drop extra tables */
+    return;
+  }
 
   if (st->tables_len)
     st->tables[st->tables_len++]= ',';
@@ -510,7 +519,11 @@ static void handle_table_event(MYSQL_THD thd,
 {
   StatementState *st= get_state(thd);
 
-  if (st->query_id != event->query_id)
+  /* Plugin enabled mid-statement (no GENERAL_LOG seen): start ad-hoc,
+     without a start clock. Inside a statement we accumulate everything —
+     sub-statements of stored routines advance query_id, but their tables
+     still belong to the dispatched statement. */
+  if (!st->in_statement)
     state_begin_statement(st, event->query_id, 0);
 
   const char *db= event->database.str;
@@ -518,22 +531,31 @@ static void handle_table_event(MYSQL_THD thd,
   const char *tbl= event->table.str;
   size_t tbl_len= event->table.length;
 
+  int explicit_match= 0;
+  int schema_match= 0;
+  mysql_rwlock_rdlock(&filter_lock);
+  const FilterRules *rules= active_rules;
+  if (rules)
+  {
+    explicit_match= selective_log::match_table(*rules, db, db_len,
+                                               tbl, tbl_len);
+    if (!explicit_match && !st->matched)
+      schema_match= selective_log::match_schema(*rules, db, db_len);
+  }
+  mysql_rwlock_unlock(&filter_lock);
+
+  /* bookkeeping side-effect tables only count when explicitly filtered */
+  if (!explicit_match && is_internal_stats_table(db, db_len, tbl, tbl_len))
+    return;
+
   state_add_table(st, db, db_len, tbl, tbl_len);
   if (event->event_subclass == MYSQL_AUDIT_TABLE_RENAME &&
       event->new_table.length)
     state_add_table(st, event->new_database.str, event->new_database.length,
                     event->new_table.str, event->new_table.length);
 
-  if (!st->matched)
-  {
-    mysql_rwlock_rdlock(&filter_lock);
-    const FilterRules *rules= active_rules;
-    if (rules &&
-        (selective_log::match_schema(*rules, db, db_len) ||
-         selective_log::match_table(*rules, db, db_len, tbl, tbl_len)))
-      st->matched= 1;
-    mysql_rwlock_unlock(&filter_lock);
-  }
+  if (explicit_match || schema_match)
+    st->matched= 1;
 }
 
 static void handle_status_event(MYSQL_THD thd,
@@ -544,7 +566,7 @@ static void handle_status_event(MYSQL_THD thd,
 
   StatementState *st= get_state(thd);
 
-  int log_it= st->matched && st->query_id == event->query_id;
+  int log_it= st->matched && st->in_statement;
 
   if (!log_it)
   {
@@ -562,7 +584,7 @@ static void handle_status_event(MYSQL_THD thd,
 
   {
     double duration_ms= -1;
-    if (st->query_id == event->query_id && st->have_start)
+    if (st->in_statement && st->have_start)
       duration_ms= (double) (now_ns() - st->start_ns) / 1e6;
 
     if (opt_min_duration_ms > 0 &&
@@ -582,8 +604,7 @@ static void handle_status_event(MYSQL_THD thd,
              tm_time.tm_hour, tm_time.tm_min, tm_time.tm_sec,
              (int) (tv.tv_usec / 1000));
 
-    const int have_tables= (st->query_id == event->query_id &&
-                            st->tables_len > 0);
+    const int have_tables= (st->in_statement && st->tables_len > 0);
     char numbuf[64];
     std::string user_host;
     parse_user_host(&user_host, event->general_user,
@@ -628,7 +649,10 @@ static void handle_status_event(MYSQL_THD thd,
         }
       }
 
-      line.append("],\"command\":\"");
+      line.push_back(']');
+      if (have_tables && st->tables_truncated)
+        line.append(",\"tables_truncated\":true");
+      line.append(",\"command\":\"");
       append_command(&line, event->general_query,
                      event->general_query_length);
 
@@ -671,7 +695,11 @@ static void handle_status_event(MYSQL_THD thd,
                                        event->database.length);
       sql.append("','");
       if (have_tables)
+      {
         selective_log::sql_escape_append(&sql, st->tables, st->tables_len);
+        if (st->tables_truncated)
+          sql.append(",...");
+      }
       sql.append("','");
       append_command(&sql, event->general_query,
                      event->general_query_length);
@@ -698,7 +726,9 @@ reset:
   /* STATUS closes the statement: never log it twice. */
   st->matched= 0;
   st->tables_len= 0;
+  st->tables_truncated= 0;
   st->have_start= 0;
+  st->in_statement= 0;
 }
 
 static void selective_log_notify(MYSQL_THD thd,

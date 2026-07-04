@@ -138,8 +138,8 @@ Uma linha por evento, chaves fixas:
 ```
 
 - `tables` = tabelas realmente tocadas pelo statement (via eventos
-  TABLE_LOCK), incluindo tabelas internas tocadas pelo servidor no mesmo
-  statement (ex.: `mysql.column_stats` num INSERT com EITS ativo).
+  TABLE_LOCK). Desde a v0.4.0, tabelas internas de bookkeeping de
+  estatísticas são excluídas, salvo filtro explícito — ver D13.
 - `command` = primeira palavra-chave do SQL (uppercase), `OTHER` se não
   identificável. Escrita via logger service, sem rotação por tamanho
   (retenção fica com logrotate externo).
@@ -158,3 +158,30 @@ auto-log é impossível porque o callback ignora eventos vindos da própria
 thread (`table_writer_is_self()`). A tabela `mysql.selective_log_events`
 (ENGINE=Aria) é criada lazy pela thread e recriada se sumir (errno
 1146/1049), atendendo à restrição de não rodar DDL no `init()` do plugin.
+
+## D13. Precisão da coleta (v0.4.0) — correções pós-uso real
+
+Ajustes motivados por um INSERT via DBeaver logado com `command=OTHER`:
+
+1. **Classificação de comando comment-aware**: o DBeaver (e outros clients)
+   envia o statement com o comentário de linha anexado
+   (`-- comentário\nINSERT ...`) — SQL válido que o servidor executa como
+   texto único. O extrator de comando (`extract_command`, movido para o
+   `filter_engine` para ser testável standalone) agora pula comentários
+   `-- `, `#`, `/* */` e os executáveis `/*! */` e `/*M! */` (nesses dois,
+   o conteúdo É o statement). O campo `query` continua fiel ao texto
+   recebido — auditoria não reescreve o que o cliente mandou.
+2. **Acumulação por statement, não por query_id**: sub-statements de stored
+   routines avançam o `query_id` da THD; o reset por mudança de id podia
+   descartar tabelas/match no meio de um `CALL`. O estado agora abre no
+   `GENERAL_LOG` (início do dispatch) e fecha no `GENERAL_STATUS`
+   (`in_statement`), acumulando todos os eventos TABLE no intervalo.
+   Verificado na prática: cada sub-statement de SP também emite seu próprio
+   STATUS e vira evento individual com suas tabelas — cobertura dupla.
+3. **Exclusão de bookkeeping**: `mysql.{table,column,index}_stats` e
+   `mysql.innodb_{table,index}_stats` são lockadas como efeito colateral de
+   DML (EITS/InnoDB persistent stats) e poluíam `tables_involved`. Agora só
+   contam se listadas explicitamente em `tables_to_log`.
+4. **Truncamento visível**: buffer de tabelas por conexão subiu para ~3,9 KB
+   e o estouro é sinalizado (`"tables_truncated":true` no JSON, `,...` na
+   tabela) em vez de silencioso.
