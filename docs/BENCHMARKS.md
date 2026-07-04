@@ -79,6 +79,56 @@ docker exec -i mariadb-plugin-test bash < scripts/benchmark.sh
 #            BENCH_LIGHT_CONCURRENCY, BENCH_LIGHT_QUERIES
 ```
 
+## Perfil de produção: 100k SELECT + 20k DML por minuto
+
+Teste com o mix real informado pelo DBA (~83% SELECT / ~17% escrita ≈ 2.000
+qps de demanda), via [`scripts/benchmark-profile.sh`](../scripts/benchmark-profile.sh)
+— mix exato de 15 SELECT : 1 INSERT : 1 UPDATE : 1 DELETE, `concurrency=16`,
+plugin v0.5.1.
+
+### Capacidade (full speed, 36.000 queries por medição)
+
+| Cenário | qps | Δ vs baseline |
+|---|---:|---:|
+| baseline (tudo OFF) | 29.925 | — |
+| `general_log=ON` | 28.685 | −4,1% |
+| **realista**: filtro `app_main:dml`, FILE (só writes auditados) | 29.925 | **0,0%** |
+| filtro `app_main:dml`, TABLE | 29.340 | −2,0% (≈ ruído) |
+| pior caso: `app_main` inteiro em FILE (SELECTs inclusive) | 31.088 | +3,9% (ruído)¹ |
+
+¹ Cenário com *mais* trabalho medindo *mais rápido* que o baseline delimita a
+banda de ruído da máquina (±4%): o custo do plugin fica abaixo do ruído em
+todos os cenários, enquanto o general_log aparece no limite da banda.
+
+**Headroom**: a demanda real (~2.000 qps) usa **6,7%** da capacidade medida
+com o plugin ativo no cenário realista.
+
+### Sustentado: 5 minutos a plena carga (cenário realista, FILE)
+
+30.480 qps médios por 300 s (≈ **15× a demanda de produção**), logando
+**5.400 eventos/s** (≈ 16× os 333 writes/s reais):
+
+| Métrica | Resultado |
+|---|---|
+| RSS do mariadbd | 256 → 262 MB (+6 MB, estabilizando; sem crescimento monotônico — consistente com caches do servidor, não leak) |
+| Eventos logados | 1.620.006, **zero** drops / write_failures / callback_errors |
+| Arquivo de log | 363 MB para 1,62M eventos ≈ **224 bytes/evento** |
+
+### Tradução para o volume de produção (20k DML/min auditados)
+
+- **Throughput/latência**: nenhuma degradação mensurável — na taxa real
+  (2k qps) o custo é indistinguível de zero, e mesmo a 15× isso o plugin
+  fica dentro do ruído.
+- **Disco (o único efeito operacional relevante)**: 20.000 eventos/min ×
+  224 B ≈ **4,5 MB/min ≈ 270 MB/h ≈ 6,5 GB/dia** de JSON. Planejar
+  logrotate/expurgo (ou `min_duration_ms`/filtros mais estreitos para
+  reduzir volume).
+- **Modo TABLE**: acompanhou ~29k qps (≈ 4.900 INSERTs/s no writer) sem um
+  único drop — a fila só descartou no teste sintético anterior a 60k+
+  eventos/s. Na taxa real (333/s) opera com folga de ordens de magnitude;
+  atenção apenas ao crescimento da `mysql.selective_log_events` (mesmo
+  ~224 B/evento + índice) — expurgo periódico recomendado.
+
 ## Validação de memória (Valgrind)
 
 [`scripts/valgrind-test.sh`](../scripts/valgrind-test.sh) sobe o `mariadbd`
