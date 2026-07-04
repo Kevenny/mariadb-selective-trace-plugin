@@ -18,9 +18,18 @@ servidor:
 | Windows | não suportado nesta versão (código usa POSIX; porte viável, ver README) |
 
 O build EL8 requer só GLIBC_2.17+, então carrega em EL8, EL9 e distros mais
-novas. Compatível com qualquer servidor MariaDB **11.4.x** (validado contra
-11.4.4 compilado e 11.4.12 dos RPMs oficiais em OL8). Para outra série
+novas. **Validado em Oracle Linux 8 e Oracle Linux 9**, ambos com MariaDB
+11.4.12 instalado via RPM oficial (mariadb.org), rodando o mesmo `.so` —
+smoke test completo (FILE, TABLE, JOIN cross-schema, UNINSTALL/INSTALL) nos
+dois. Compatível com qualquer servidor MariaDB **11.4.x**. Para outra série
 (10.11, 11.8...), recompile contra o fonte da série correspondente.
+
+Para validar em OL9, o mesmo script serve (só muda a imagem):
+
+```bash
+docker run --rm -i -v "$PWD/build/plugin_output-ol8:/plugin_out:ro" \
+    oraclelinux:9 bash < scripts/validate-ol8.sh
+```
 
 Como gerar o build EL8:
 

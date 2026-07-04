@@ -117,7 +117,8 @@ docker run --rm -i -v "$PWD/build/plugin_output-ol8:/plugin_out:ro" \
     oraclelinux:8 bash < scripts/validate-ol8.sh
 ```
 
-Validado contra MariaDB 11.4.12 (RPMs oficiais) em Oracle Linux 8 — o plugin
+Validado contra MariaDB 11.4.12 (RPMs oficiais) em Oracle Linux 8 **e 9**
+(mesmo .so; para OL9 basta trocar a imagem para oraclelinux:9) — o plugin
 compilado contra o fonte 11.4.4 é compatível com toda a série 11.4.x.
 
 **Windows**: não suportado nesta versão — `log_writer_table` usa pthread,
