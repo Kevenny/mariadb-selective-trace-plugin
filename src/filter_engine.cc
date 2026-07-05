@@ -1,4 +1,4 @@
-/* Copyright (C) 2026 selective_log plugin authors
+/* Copyright (C) 2026 selective_trace plugin authors
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -17,7 +17,7 @@
 
 #include <cstring>
 
-namespace selective_log {
+namespace selective_trace {
 
 static inline char ascii_lower(char c)
 {
@@ -524,4 +524,4 @@ bool mask_secrets(const char *query, size_t query_len, std::string *out)
   return masked;
 }
 
-} /* namespace selective_log */
+} /* namespace selective_trace */

@@ -36,19 +36,19 @@ prepare() {
         CREATE TABLE app_main.t (id INT AUTO_INCREMENT PRIMARY KEY, v VARCHAR(64));
     "
     $MYSQL -Dapp_main -e "INSERT INTO t (v) SELECT 'seed' FROM seq_1_to_1000;"
-    $MYSQL -e "TRUNCATE mysql.selective_log_events" 2>/dev/null || true
+    $MYSQL -e "TRUNCATE mysql.selective_trace_events" 2>/dev/null || true
     rm -f "$LOG_PATH"
 }
 
 set_scenario() {  # <enabled> <general_log> <schemas_filter> <output>
     $MYSQL -e "
-        SET GLOBAL selective_log_enabled=$1;
+        SET GLOBAL selective_trace_enabled=$1;
         SET GLOBAL general_log=$2;
-        SET GLOBAL selective_log_schemas_to_log='$3';
-        SET GLOBAL selective_log_tables_to_log='';
-        SET GLOBAL selective_log_output='$4';
-        SET GLOBAL selective_log_log_file_path='$LOG_PATH';
-        SET GLOBAL selective_log_min_duration_ms=0;
+        SET GLOBAL selective_trace_schemas_to_log='$3';
+        SET GLOBAL selective_trace_tables_to_log='';
+        SET GLOBAL selective_trace_output='$4';
+        SET GLOBAL selective_trace_file_path='$LOG_PATH';
+        SET GLOBAL selective_trace_min_duration_ms=0;
     "
 }
 
@@ -106,9 +106,9 @@ sample() {
     local pid; pid=$(pidof mariadbd 2>/dev/null | awk '{print $1}'); pid=${pid:-1}
     rss_kb=$(awk '/VmRSS/ {print $2}' "/proc/$pid/status")
     file_kb=$(du -k "$LOG_PATH" 2>/dev/null | cut -f1 || echo 0)
-    logged=$(status_num Selective_log_events_logged)
-    failures=$(status_num Selective_log_write_failures)
-    errors=$(status_num Selective_log_callback_errors)
+    logged=$(status_num Selective_trace_events_logged)
+    failures=$(status_num Selective_trace_write_failures)
+    errors=$(status_num Selective_trace_callback_errors)
     echo "t=${t}s rss_mb=$((rss_kb/1024)) log_kb=${file_kb} logged=${logged} write_failures=${failures} callback_errors=${errors}"
 }
 
@@ -135,8 +135,8 @@ sample "$ELAPSED"
 echo ""
 echo "== RESUMO SUSTENTADO =="
 echo "duracao=${ELAPSED}s queries_totais=${TOTAL_QUERIES} qps_medio=$((TOTAL_QUERIES/ELAPSED))"
-echo "eventos_logados=$(status_num Selective_log_events_logged) (esperado ~1/6 das queries)"
-echo "drops=$(status_num Selective_log_events_dropped) write_failures=$(status_num Selective_log_write_failures) callback_errors=$(status_num Selective_log_callback_errors)"
+echo "eventos_logados=$(status_num Selective_trace_events_logged) (esperado ~1/6 das queries)"
+echo "drops=$(status_num Selective_trace_events_dropped) write_failures=$(status_num Selective_trace_write_failures) callback_errors=$(status_num Selective_trace_callback_errors)"
 ls -la "$LOG_PATH"
 
 set_scenario OFF OFF '' FILE

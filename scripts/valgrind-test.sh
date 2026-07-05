@@ -6,7 +6,7 @@
 # o mariadbd compilado com símbolos em /opt/mariadb-build:
 #   docker exec -i mariadb-plugin-dev bash < scripts/valgrind-test.sh
 #
-# Sobe o mariadbd sob Valgrind com o selective_log carregado, roda uma
+# Sobe o mariadbd sob Valgrind com o selective_trace carregado, roda uma
 # bateria de queries cobrindo os dois modos de saída e as trocas de filtro,
 # derruba o servidor de forma limpa e reporta leaks com frames do plugin.
 # ---------------------------------------------------------------------------
@@ -36,8 +36,8 @@ valgrind --tool=memcheck --leak-check=full \
     --log-file="$VGLOG" \
     "$BUILD_DIR/sql/mariadbd" --no-defaults \
     --datadir="$DATADIR" --socket="$SOCK" --skip-networking \
-    --plugin-dir="$BUILD_DIR/plugin/selective_log" \
-    --plugin-load-add=selective_log.so \
+    --plugin-dir="$BUILD_DIR/plugin/selective_trace" \
+    --plugin-load-add=selective_trace.so \
     --plugin-maturity=experimental \
     --loose-innodb-buffer-pool-size=64M \
     >/tmp/vg_mysqld_stderr.log 2>&1 &
@@ -58,9 +58,9 @@ CREATE DATABASE vg_cold;
 CREATE TABLE vg_hot.t (id INT AUTO_INCREMENT PRIMARY KEY, v VARCHAR(64));
 CREATE TABLE vg_cold.t (id INT AUTO_INCREMENT PRIMARY KEY, v VARCHAR(64));
 
-SET GLOBAL selective_log_enabled=ON;
-SET GLOBAL selective_log_schemas_to_log='vg_hot';
-SET GLOBAL selective_log_log_file_path='/tmp/vg_selective.json';
+SET GLOBAL selective_trace_enabled=ON;
+SET GLOBAL selective_trace_schemas_to_log='vg_hot';
+SET GLOBAL selective_trace_file_path='/tmp/vg_selective.json';
 
 -- modo FILE
 INSERT INTO vg_hot.t (v) VALUES ('a'),('b'),('c');
@@ -71,53 +71,53 @@ INSERT INTO vg_cold.t (v) VALUES ('invisivel');
 SELECT * FROM vg_hot.t JOIN vg_cold.t USING (id);
 
 -- troca de filtros repetida (exercita update/free das listas)
-SET GLOBAL selective_log_tables_to_log='vg_cold.t,logs.*';
-SET GLOBAL selective_log_tables_to_log='vg_cold.t';
-SET GLOBAL selective_log_tables_to_log='';
-SET GLOBAL selective_log_schemas_to_log='vg_hot,vg_cold,a,b,c,d,e,f';
-SET GLOBAL selective_log_schemas_to_log='vg_hot:insert|update,vg_cold:dml';
-SET GLOBAL selective_log_tables_to_log='vg_cold.t:delete,logs.*:ddl';
-SET GLOBAL selective_log_schemas_to_log='vg_hot';
-SET GLOBAL selective_log_tables_to_log='';
-SET GLOBAL selective_log_log_file_path='/tmp/vg_selective2.json';
+SET GLOBAL selective_trace_tables_to_log='vg_cold.t,logs.*';
+SET GLOBAL selective_trace_tables_to_log='vg_cold.t';
+SET GLOBAL selective_trace_tables_to_log='';
+SET GLOBAL selective_trace_schemas_to_log='vg_hot,vg_cold,a,b,c,d,e,f';
+SET GLOBAL selective_trace_schemas_to_log='vg_hot:insert|update,vg_cold:dml';
+SET GLOBAL selective_trace_tables_to_log='vg_cold.t:delete,logs.*:ddl';
+SET GLOBAL selective_trace_schemas_to_log='vg_hot';
+SET GLOBAL selective_trace_tables_to_log='';
+SET GLOBAL selective_trace_file_path='/tmp/vg_selective2.json';
 
 -- erro de SQL (evento com error_code)
 SELECT * FROM vg_hot.nao_existe;
 
 -- mascaramento de credenciais (aloca a query saneada)
-SET GLOBAL selective_log_schemas_to_log='vg_hot,mysql';
+SET GLOBAL selective_trace_schemas_to_log='vg_hot,mysql';
 CREATE USER IF NOT EXISTS vguser@localhost IDENTIFIED BY 'vgsecret';
 SET PASSWORD FOR vguser@localhost = PASSWORD('vgsecret2');
 DROP USER IF EXISTS vguser@localhost;
-SET GLOBAL selective_log_schemas_to_log='vg_hot';
+SET GLOBAL selective_trace_schemas_to_log='vg_hot';
 
 -- modo TABLE (thread interna + criação lazy da tabela)
-SET GLOBAL selective_log_output='TABLE';
+SET GLOBAL selective_trace_output='TABLE';
 INSERT INTO vg_hot.t (v) VALUES ('table-mode');
 SELECT COUNT(*) FROM vg_hot.t;
 DO SLEEP(2);
-SELECT COUNT(*) AS eventos FROM mysql.selective_log_events;
+SELECT COUNT(*) AS eventos FROM mysql.selective_trace_events;
 
 -- min_duration
-SET GLOBAL selective_log_min_duration_ms=500;
+SET GLOBAL selective_trace_min_duration_ms=500;
 SELECT SLEEP(0.6);
 SELECT 1;
-SET GLOBAL selective_log_min_duration_ms=0;
+SET GLOBAL selective_trace_min_duration_ms=0;
 
 -- desliga e religa
-SET GLOBAL selective_log_enabled=OFF;
+SET GLOBAL selective_trace_enabled=OFF;
 SELECT COUNT(*) FROM vg_hot.t;
-SET GLOBAL selective_log_enabled=ON;
+SET GLOBAL selective_trace_enabled=ON;
 SQL
 
 # erro proposital em SET (caminho de check que rejeita)
-$CLIENT -e "SET GLOBAL selective_log_tables_to_log='invalido'" 2>/dev/null || true
+$CLIENT -e "SET GLOBAL selective_trace_tables_to_log='invalido'" 2>/dev/null || true
 
 echo ">> UNINSTALL/INSTALL sob Valgrind"
-$CLIENT -e "UNINSTALL PLUGIN selective_log" || true
+$CLIENT -e "UNINSTALL PLUGIN selective_trace" || true
 sleep 2
-$CLIENT -e "INSTALL PLUGIN selective_log SONAME 'selective_log.so'"
-$CLIENT -e "SET GLOBAL selective_log_enabled=ON; SET GLOBAL selective_log_schemas_to_log='vg_hot'; SELECT COUNT(*) FROM vg_hot.t"
+$CLIENT -e "INSTALL PLUGIN selective_trace SONAME 'selective_trace.so'"
+$CLIENT -e "SET GLOBAL selective_trace_enabled=ON; SET GLOBAL selective_trace_schemas_to_log='vg_hot'; SELECT COUNT(*) FROM vg_hot.t"
 
 echo ">> Shutdown limpo"
 $ADMIN shutdown
@@ -125,7 +125,7 @@ wait $VGPID || true
 
 echo ""
 echo "== RESUMO VALGRIND (frames do plugin) =="
-grep -n "selective_log\|filter_engine\|log_writer" "$VGLOG" | head -40 || echo "(nenhum frame do plugin em leaks)"
+grep -n "selective_trace\|filter_engine\|log_writer" "$VGLOG" | head -40 || echo "(nenhum frame do plugin em leaks)"
 echo ""
 echo "== LEAK SUMMARY =="
 grep -A6 "LEAK SUMMARY" "$VGLOG" | head -12

@@ -1,4 +1,4 @@
-# DECISIONS.md — Decisões técnicas do plugin `selective_log`
+# DECISIONS.md — Decisões técnicas do plugin `selective_trace`
 
 Registro das decisões de design, com a justificativa e as referências no
 código-fonte do MariaDB 11.4.4 que as embasam (ver também
@@ -60,25 +60,25 @@ Detalhado em RESEARCH_NOTES.md §2. Resumo:
   crua; diferente do server_audit, que usa buffers estáticos de 1024 bytes e
   herda o limite). As estruturas parseadas (listas de filtro) são nossas e
   protegidas por rwlock.
-- `selective_log_output` como `MYSQL_SYSVAR_ENUM` + `TYPELIB`
+- `selective_trace_output` como `MYSQL_SYSVAR_ENUM` + `TYPELIB`
   (`FILE`/`TABLE`), padrão idêntico ao `output_type` do server_audit.
 - `min_duration_ms` como `MYSQL_SYSVAR_UINT` (range 0..2^31-1). O nome fala em
   "INT" na spec; UINT evita valores negativos sem sentido.
 - Parsing das listas acontece na callback `update` (Etapa 2), sob write-lock,
   seguindo o padrão `update_incl_users` do server_audit.
 
-## D5. Build: `MYSQL_ADD_PLUGIN(selective_log ... MODULE_ONLY)`
+## D5. Build: `MYSQL_ADD_PLUGIN(selective_trace ... MODULE_ONLY)`
 
 `MODULE_ONLY` = só build dinâmica (`.so`), atendendo o requisito de
 `INSTALL PLUGIN ... SONAME`. A macro (cmake/plugin.cmake:215) linka
 `mysqlservices` automaticamente para módulos dinâmicos → logger service e SQL
 service disponíveis. O `build.sh` do projeto já passa
-`-DPLUGIN_SELECTIVE_LOG=DYNAMIC`, coerente com o nome do target.
+`-DPLUGIN_SELECTIVE_TRACE=DYNAMIC`, coerente com o nome do target.
 
-## D6. Nome do plugin em minúsculas (`selective_log`)
+## D6. Nome do plugin em minúsculas (`selective_trace`)
 
 `INSTALL PLUGIN` e `SHOW PLUGINS` são case-insensitive; a spec e o README usam
-`selective_log` minúsculo. Mantido assim na struct para a saída de
+`selective_trace` minúsculo. Mantido assim na struct para a saída de
 `SHOW PLUGINS` ficar igual à documentação.
 
 ## D7. Link do módulo: `RECOMPILE_FOR_EMBEDDED` para escapar do `--no-undefined`
@@ -151,11 +151,11 @@ conexão local **reusa a THD corrente** quando ela existe e não tem locks —
 rodar INSERT de dentro do callback de audit executaria SQL dentro da sessão
 do usuário. Em vez disso os eventos viram INSERTs prontos numa fila
 (limite 10000; excedente é descartado e contado em
-`Selective_log_events_dropped`) consumida por uma thread própria do plugin.
+`Selective_trace_events_dropped`) consumida por uma thread própria do plugin.
 Benefícios verificados no fonte: thread sem `current_thd` ganha THD interna
 dedicada com `sql_log_bin=0` (não replica) e `skip_grants`; o loop de
 auto-log é impossível porque o callback ignora eventos vindos da própria
-thread (`table_writer_is_self()`). A tabela `mysql.selective_log_events`
+thread (`table_writer_is_self()`). A tabela `mysql.selective_trace_events`
 (ENGINE=Aria) é criada lazy pela thread e recriada se sumir (errno
 1146/1049), atendendo à restrição de não rodar DDL no `init()` do plugin.
 
@@ -237,14 +237,14 @@ memória, um `bad_alloc` atravessando a fronteira `extern "C"` viraria
 `std::terminate` → abort do mariadbd inteiro. Todas as fronteiras ganharam
 `try/catch (...)`:
 
-1. `selective_log_notify` (callback de eventos) — descarta o evento;
+1. `selective_trace_notify` (callback de eventos) — descarta o evento;
 2. `check_*`/`update_*` das sysvars — o SET falha limpo / regras antigas
    permanecem ativas (o unlock do rwlock fica fora do try, sempre executa);
 3. `table_writer_enqueue` — evento descartado e contado;
 4. loop da thread do writer — a thread sobrevive a qualquer exceção de um
    INSERT individual.
 
-Exceções engolidas são contadas em `Selective_log_callback_errors`
+Exceções engolidas são contadas em `Selective_trace_callback_errors`
 (SHOW GLOBAL STATUS) — valor diferente de zero indica pressão de memória ou
 bug a investigar, sem derrubar o servidor.
 
@@ -259,7 +259,7 @@ MariaDB 11.4.12 via RPM apontou 6/7 ok e um achado; corrigidos:
    filter_engine, testável) substitui esses literais por `***`, com
    fronteira de palavra (não afeta coluna `password_hash` nem
    `'my password'` em INSERT comum). Controlado por
-   `selective_log_mask_passwords` (default ON).
+   `selective_trace_mask_passwords` (default ON).
 2. **sql_mode do writer** (defesa em profundidade): o escaping do INSERT no
    modo TABLE usa backslashes, inválido sob `NO_BACKSLASH_ESCAPES`. A
    conexão interna do writer passou a fixar `SET SESSION sql_mode=''` ao
@@ -289,7 +289,7 @@ quebras de ABI frente à 11.4, tratadas sem tocar na lógica do plugin:
 2. **Logger service**: `logger_open()` ganhou um 4º argumento `buffer_size`
    (o service passou a bufferizar internamente) e `logger_write` passou de
    `const char*` para `const void*`. Tratado com um wrapper
-   `SELECTIVE_LOGGER_OPEN` selecionado por `#if MYSQL_VERSION_ID >= 120000`
+   `SELECTIVE_TRACEGER_OPEN` selecionado por `#if MYSQL_VERSION_ID >= 120000`
    (buffer_size=0 mantém o comportamento não-bufferizado); `line.data()`
    (`const char*`) converte implicitamente para `const void*`, então o
    `write` serve nas duas séries. O mesmo código-fonte compila em 11.4 e
@@ -328,3 +328,25 @@ Descobertas ao validar o caminho crítico (corrigidas):
 Prova de qualidade obtida: a **mesma** suíte MTR (mesmo .result) passa em
 11.4.4 e 12.3.2 — o comportamento observável do plugin é idêntico entre
 séries; só a ABI de compilação difere (D18).
+
+## D20. Renomeação para `selective_trace` — reposicionamento como trace (v0.7.0)
+
+O plugin nasceu rotulado como "auditoria", mas o propósito real sempre foi
+o que o `general_log` não faz: **rastrear parcialmente** — só queries de
+schemas/tabelas específicos, para diagnóstico. Auditoria carrega expectativas
+de compliance (registro imutável, foco em quem/quando) que não são o caso.
+Renomeado `selective_log` → `selective_trace` em todo o projeto:
+
+- Nome do plugin, namespace C++, include guards, arquivo `selective_trace.cc`.
+- Variáveis `selective_trace_*` (mantido `_to_log` em schemas/tables — o
+  sufixo descreve a ação de rastrear; `log_file_path` virou `file_path`,
+  removendo o "log" redundante).
+- Tabela `mysql.selective_trace_events`, status `Selective_trace_*`.
+- Suíte MTR `suite/selective_trace/`, docs e scripts.
+
+**Não** mudou: a Audit Plugin API interna (é só o mecanismo — o único hook
+que dá schema+tabela resolvidos; serve para trace tanto quanto para audit),
+o comportamento observável, os defaults (mask_passwords segue ON — mesmo num
+trace, proteger segredo por padrão é prudente; quem quer a query crua
+desliga). `CLAUDE.md` preservado com o nome antigo como documento histórico.
+Validado: 108 unitários, MTR, Valgrind sem leaks, funcional no 11.4 e 12.3.

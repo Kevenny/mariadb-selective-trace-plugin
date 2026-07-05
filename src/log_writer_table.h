@@ -1,4 +1,4 @@
-/* Copyright (C) 2026 selective_log plugin authors
+/* Copyright (C) 2026 selective_trace plugin authors
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -14,7 +14,7 @@
    Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1335 USA */
 
 /*
-  log_writer_table — TABLE output mode for the selective_log plugin.
+  log_writer_table — TABLE output mode for the selective_trace plugin.
 
   Events are enqueued as ready-to-run INSERT statements and executed by a
   dedicated background thread over an internal SQL-service connection
@@ -25,16 +25,16 @@
   loop is broken by construction: the audit callback ignores every event
   raised from this thread (table_writer_is_self()).
 
-  The log table (mysql.selective_log_events) is created lazily by the
+  The log table (mysql.selective_trace_events) is created lazily by the
   writer thread and recreated if an INSERT fails because it went missing.
 */
 
-#ifndef SELECTIVE_LOG_LOG_WRITER_TABLE_H
-#define SELECTIVE_LOG_LOG_WRITER_TABLE_H
+#ifndef SELECTIVE_TRACE_LOG_WRITER_TABLE_H
+#define SELECTIVE_TRACE_LOG_WRITER_TABLE_H
 
 #include <string>
 
-namespace selective_log {
+namespace selective_trace {
 
 /* Called once from plugin init/deinit. shutdown() joins the thread. */
 void table_writer_init();
@@ -56,6 +56,6 @@ unsigned long table_writer_dropped();
 /* Append src as a SQL single-quoted string body (no quotes added). */
 void sql_escape_append(std::string *out, const char *src, size_t len);
 
-} /* namespace selective_log */
+} /* namespace selective_trace */
 
-#endif /* SELECTIVE_LOG_LOG_WRITER_TABLE_H */
+#endif /* SELECTIVE_TRACE_LOG_WRITER_TABLE_H */

@@ -174,7 +174,7 @@ sub-segundo. Solução adotada: registrar nós mesmos um clock monotônico de
 microssegundos (`my_interval_timer()`/`microsecond_interval_timer()` de
 `my_global.h`, ou `clock_gettime`) no **primeiro evento do statement**
 (TABLE_LOCK ou GENERAL_LOG) guardado no estado por-conexão, e calcular o delta
-no `GENERAL_STATUS`. Precisão de ms garantida para `selective_log_min_duration_ms`.
+no `GENERAL_STATUS`. Precisão de ms garantida para `selective_trace_min_duration_ms`.
 
 ## 3. Como o `server_audit` estrutura variáveis de sistema dinâmicas
 
@@ -191,7 +191,7 @@ static MYSQL_SYSVAR_STR(file_path, file_path, PLUGIN_VAR_RQCMDARG,
 
 - Todas registradas num array `static struct st_mysql_sys_var* vars[]` passado
   na declaração do plugin. O prefixo do nome (`server_audit_`) vem do nome do
-  plugin — as nossas serão automaticamente `selective_log_*`.
+  plugin — as nossas serão automaticamente `selective_trace_*`.
 - **`check` func** (opcional): valida e copia o valor para `save` (para STR,
   `value->val_str()` retorna memória temporária do statement — a doc do
   `plugin.h` manda copiar se precisar persistir).
@@ -224,7 +224,7 @@ static void update_incl_users(MYSQL_THD thd, ..., const void *save)
   `syslog_info`). Para nossas listas usaremos `PLUGIN_VAR_MEMALLOC` +
   estruturas parseadas próprias (mais simples e sem limite de 1024 bytes).
 - Enum: `MYSQL_SYSVAR_ENUM` + `TYPELIB` (ver `output_type`, linhas 413–426) —
-  será o padrão do nosso `selective_log_output` (`FILE`/`TABLE`).
+  será o padrão do nosso `selective_trace_output` (`FILE`/`TABLE`).
 - Estado por conexão: o `server_audit` usa um hack com
   `MYSQL_THDVAR_STR(loc_info, PLUGIN_VAR_NOSYSVAR|PLUGIN_VAR_NOCMDOPT|PLUGIN_VAR_MEMALLOC, ...)`
   guardando uma `struct connection_info` serializada como "string" thd-local.
@@ -270,7 +270,7 @@ int logger_rotate(LOGGER_HANDLE *log);
   `if (!thd || internal_stop_logging) return;`).
 - Para o nosso modo TABLE, além de uma flag análoga, o filtro fail-safe já
   ajuda: os INSERTs internos serão na nossa tabela de log
-  (`mysql.selective_log_events` ou schema próprio) — basta o `should_log_event`
+  (`mysql.selective_trace_events` ou schema próprio) — basta o `should_log_event`
   ignorar sempre eventos cujo alvo é a própria tabela de log.
 
 ## 6. Execução de SQL interno por plugin (modo TABLE)
@@ -327,14 +327,14 @@ MYSQL_ADD_PLUGIN(plugin_name source1...sourceN
 ```
 
 - **`MODULE_ONLY`** → compila somente como `.so` dinâmica (nosso caso; atende
-  o requisito `DYNAMIC` e o `-DPLUGIN_SELECTIVE_LOG=DYNAMIC` do build.sh).
+  o requisito `DYNAMIC` e o `-DPLUGIN_SELECTIVE_TRACE=DYNAMIC` do build.sh).
 - Plugins `MODULE_ONLY` ganham `TARGET_LINK_LIBRARIES(target mysqlservices ...)`
   automaticamente (linha 215 do plugin.cmake) → logger service e sql service
   disponíveis sem config extra.
 - O define `MYSQL_DYNAMIC_PLUGIN` é adicionado automaticamente para builds
   dinâmicas (é ele que ativa os wrappers `#define logger_open ...` dos services).
 - Nosso `src/CMakeLists.txt` será essencialmente:
-  `MYSQL_ADD_PLUGIN(selective_log <fontes> MODULE_ONLY)`.
+  `MYSQL_ADD_PLUGIN(selective_trace <fontes> MODULE_ONLY)`.
 
 ## 8. Observações do `audit_null.c` (exemplo mínimo)
 

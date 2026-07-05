@@ -1,4 +1,4 @@
-/* Copyright (C) 2026 selective_log plugin authors
+/* Copyright (C) 2026 selective_trace plugin authors
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -27,10 +27,10 @@
 #include <cstring>
 #include "filter_engine.h"
 
-using selective_log::FilterRules;
-using selective_log::parse_filter_lists;
-using selective_log::match_schema;
-using selective_log::match_table;
+using selective_trace::FilterRules;
+using selective_trace::parse_filter_lists;
+using selective_trace::match_schema;
+using selective_trace::match_table;
 
 static int failures= 0;
 static int checks= 0;
@@ -169,7 +169,7 @@ static void test_invalid_tokens()
 
 static void test_command_qualifiers()
 {
-  using namespace selective_log;
+  using namespace selective_trace;
   FilterRules r;
   std::string err;
 
@@ -211,7 +211,7 @@ static void test_command_qualifiers()
 static std::string cmd(const char *q)
 {
   char buf[24];
-  selective_log::extract_command(q, std::strlen(q), buf, sizeof(buf));
+  selective_trace::extract_command(q, std::strlen(q), buf, sizeof(buf));
   return std::string(buf);
 }
 
@@ -247,7 +247,7 @@ static void test_extract_command()
 static std::string mask(const char *q)
 {
   std::string out;
-  selective_log::mask_secrets(q, std::strlen(q), &out);
+  selective_trace::mask_secrets(q, std::strlen(q), &out);
   return out;
 }
 

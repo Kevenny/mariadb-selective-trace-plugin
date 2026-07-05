@@ -1,4 +1,4 @@
-/* Copyright (C) 2026 selective_log plugin authors
+/* Copyright (C) 2026 selective_trace plugin authors
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -14,7 +14,7 @@
    Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1335 USA */
 
 /*
-  filter_engine — pure filtering logic for the selective_log plugin.
+  filter_engine — pure filtering logic for the selective_trace plugin.
 
   This translation unit must stay free of MariaDB headers so it can be
   unit-tested standalone (tests/test_filter_logic.cc builds it with plain
@@ -25,14 +25,14 @@
   time, so filters behave the same regardless of lower_case_table_names.
 */
 
-#ifndef SELECTIVE_LOG_FILTER_ENGINE_H
-#define SELECTIVE_LOG_FILTER_ENGINE_H
+#ifndef SELECTIVE_TRACE_FILTER_ENGINE_H
+#define SELECTIVE_TRACE_FILTER_ENGINE_H
 
 #include <string>
 #include <vector>
 #include <cstddef>
 
-namespace selective_log {
+namespace selective_trace {
 
 /*
   Command-class bits for the per-entry command qualifiers
@@ -68,11 +68,11 @@ struct FilterEntry
 
 struct FilterRules
 {
-  /* From selective_log_schemas_to_log: lowercase schema names. */
+  /* From selective_trace_schemas_to_log: lowercase schema names. */
   std::vector<FilterEntry> schemas;
-  /* From "schema.*" entries of selective_log_tables_to_log. */
+  /* From "schema.*" entries of selective_trace_tables_to_log. */
   std::vector<FilterEntry> wildcard_schemas;
-  /* From selective_log_tables_to_log: lowercase "schema.table". */
+  /* From selective_trace_tables_to_log: lowercase "schema.table". */
   std::vector<FilterEntry> tables;
 
   bool empty() const
@@ -149,6 +149,6 @@ void extract_command(const char *query, size_t query_len,
 */
 bool mask_secrets(const char *query, size_t query_len, std::string *out);
 
-} /* namespace selective_log */
+} /* namespace selective_trace */
 
-#endif /* SELECTIVE_LOG_FILTER_ENGINE_H */
+#endif /* SELECTIVE_TRACE_FILTER_ENGINE_H */

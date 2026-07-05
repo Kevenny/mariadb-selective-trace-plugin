@@ -1,4 +1,4 @@
-# Arquitetura do Plugin `selective_log`
+# Arquitetura do Plugin `selective_trace`
 
 Este documento descreve a arquitetura **proposta inicialmente** (ponto de
 partida). O Claude Code deve validar/ajustar após a Etapa 0 de pesquisa
@@ -26,7 +26,7 @@ descrita no `CLAUDE.md`, e atualizar este arquivo se algo mudar.
                                  │
                                  ▼
 ┌─────────────────────────────────────────────────────────────┐
-│                  Plugin selective_log (.so)                   │
+│                  Plugin selective_trace (.so)                   │
 │                                                                 │
 │  ┌───────────────┐   ┌────────────────┐   ┌────────────────┐  │
 │  │ filter_engine │──▶│ decide logar?  │──▶│  log_writer_*  │  │
@@ -35,7 +35,7 @@ descrita no `CLAUDE.md`, e atualizar este arquivo se algo mudar.
 │  └───────────────┘                                             │
 │         ▲                                                      │
 │         │ atualizado via                                       │
-│         │ SET GLOBAL selective_log_*                           │
+│         │ SET GLOBAL selective_trace_*                           │
 │  ┌──────┴────────┐                                              │
 │  │  Sysvars       │                                             │
 │  └────────────────┘                                             │

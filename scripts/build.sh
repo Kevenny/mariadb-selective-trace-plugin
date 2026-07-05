@@ -14,7 +14,7 @@ set -euo pipefail
 
 MARIADB_SRC_DIR="${MARIADB_SRC_DIR:-/opt/mariadb-src}"
 BUILD_DIR="${BUILD_DIR:-/opt/mariadb-build}"
-PLUGIN_LINK_NAME="selective_log"
+PLUGIN_LINK_NAME="selective_trace"
 WORKSPACE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 MODE="${1:-full}"
@@ -40,7 +40,7 @@ configure_cmake() {
         -DCMAKE_BUILD_TYPE=RelWithDebInfo \
         -DCMAKE_C_COMPILER_LAUNCHER=ccache \
         -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-        -DPLUGIN_SELECTIVE_LOG=DYNAMIC \
+        -DPLUGIN_SELECTIVE_TRACE=DYNAMIC \
         -DWITHOUT_TOKUDB=1 \
         -DWITHOUT_MROONGA=1 \
         -DWITHOUT_ROCKSDB=1 \

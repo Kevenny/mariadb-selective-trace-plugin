@@ -3,7 +3,7 @@
 # run-mtr.sh — roda a suíte de integração MTR do plugin.
 #
 # O mysql-test-run resolve suites relativo ao *source tree* do MariaDB, então
-# instalamos src/mysql-test/suite/selective_log lá antes de chamar o mtr. No
+# instalamos src/mysql-test/suite/selective_trace lá antes de chamar o mtr. No
 # empacotamento oficial (make install) isso é feito pelo INSTALL_MYSQL_TEST do
 # MYSQL_ADD_PLUGIN; aqui replicamos para o fluxo de dev no build tree.
 #
@@ -16,8 +16,8 @@ MARIADB_SRC_DIR="${MARIADB_SRC_DIR:-/opt/mariadb-src}"
 BUILD_DIR="${BUILD_DIR:-/opt/mariadb-build}"
 WORKSPACE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-SUITE_SRC="${WORKSPACE_DIR}/src/mysql-test/suite/selective_log"
-SUITE_DST="${MARIADB_SRC_DIR}/mysql-test/suite/selective_log"
+SUITE_SRC="${WORKSPACE_DIR}/src/mysql-test/suite/selective_trace"
+SUITE_DST="${MARIADB_SRC_DIR}/mysql-test/suite/selective_trace"
 
 echo ">> Instalando a suíte MTR em ${SUITE_DST}"
 rm -rf "${SUITE_DST}"
@@ -30,10 +30,10 @@ if [ ! -x "${BUILD_DIR}/sql/mariadbd" ]; then
     echo "!! ${BUILD_DIR}/sql/mariadbd não existe — rode antes: ./scripts/build.sh full"
     exit 1
 fi
-if [ ! -f "${BUILD_DIR}/plugin/selective_log/selective_log.so" ]; then
-    (cd "${BUILD_DIR}" && ninja selective_log)
+if [ ! -f "${BUILD_DIR}/plugin/selective_trace/selective_trace.so" ]; then
+    (cd "${BUILD_DIR}" && ninja selective_trace)
 fi
 
-echo ">> Rodando mtr --suite=selective_log"
+echo ">> Rodando mtr --suite=selective_trace"
 cd "${BUILD_DIR}/mysql-test"
-exec ./mtr --suite=selective_log "$@"
+exec ./mtr --suite=selective_trace "$@"

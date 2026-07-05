@@ -1,4 +1,4 @@
-/* Copyright (C) 2026 selective_log plugin authors
+/* Copyright (C) 2026 selective_trace plugin authors
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -14,10 +14,13 @@
    Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1335 USA */
 
 /*
-  selective_log — selective query logging for MariaDB 11.4
+  selective_trace — selective query tracing for MariaDB 11.4 / 12.3+
 
-  Audit-class plugin that logs queries touching a configurable set of
-  schemas and/or tables, as a low-overhead alternative to general_log.
+  Traces (logs) queries touching a configurable set of schemas and/or
+  tables, filtered by command type — a low-overhead, partial alternative
+  to general_log (which is all-or-nothing). Built on the Audit Plugin API
+  (the only hook exposing resolved schema+table), but the purpose is
+  diagnostics/observability, not audit/compliance.
 
   Event flow per statement (see docs/RESEARCH_NOTES.md):
 
@@ -33,8 +36,8 @@
   the hot path only takes read locks, so queries never serialize.
 */
 
-#define PLUGIN_VERSION      0x0007
-#define PLUGIN_STR_VERSION  "0.6.0"
+#define PLUGIN_VERSION      0x0008
+#define PLUGIN_STR_VERSION  "0.7.0"
 
 #include <my_global.h>
 #include <my_pthread.h>
@@ -55,7 +58,7 @@
 #include "log_writer_file.h"
 #include "log_writer_table.h"
 
-using selective_log::FilterRules;
+using selective_trace::FilterRules;
 
 /* ------------------------------------------------------------------------
    Filter state, shared by all connections
@@ -74,7 +77,7 @@ static ulong status_callback_errors= 0;
 static PSI_rwlock_key key_rwlock_filter;
 static PSI_rwlock_info rwlock_key_list[]=
 {
-  { &key_rwlock_filter, "SELECTIVE_LOG::filter_lock", PSI_FLAG_GLOBAL }
+  { &key_rwlock_filter, "SELECTIVE_TRACE::filter_lock", PSI_FLAG_GLOBAL }
 };
 #else
 #define key_rwlock_filter 0
@@ -114,7 +117,7 @@ struct StatementState
 */
 static char state_init_value[sizeof(struct StatementState) + 1];
 
-static void __attribute__((constructor)) selective_log_so_init(void)
+static void __attribute__((constructor)) selective_trace_so_init(void)
 {
   memset(state_init_value, 'O', sizeof(state_init_value) - 1);
   state_init_value[sizeof(state_init_value) - 1]= 0;
@@ -122,7 +125,7 @@ static void __attribute__((constructor)) selective_log_so_init(void)
 
 static MYSQL_THDVAR_STR(state,
     PLUGIN_VAR_NOSYSVAR | PLUGIN_VAR_NOCMDOPT | PLUGIN_VAR_MEMALLOC,
-    "selective_log internal per-connection state", NULL, NULL,
+    "selective_trace internal per-connection state", NULL, NULL,
     state_init_value);
 
 static StatementState *get_state(MYSQL_THD thd)
@@ -152,12 +155,12 @@ static my_bool opt_enabled= FALSE;
 static char *opt_schemas_to_log= NULL;
 static char *opt_tables_to_log= NULL;
 static ulong opt_output= 0;
-static char *opt_log_file_path= NULL;
+static char *opt_file_path= NULL;
 static uint opt_min_duration_ms= 0;
 static my_bool opt_mask_passwords= TRUE;
 
-#define SELECTIVE_LOG_OUTPUT_FILE  0
-#define SELECTIVE_LOG_OUTPUT_TABLE 1
+#define SELECTIVE_TRACE_OUTPUT_FILE  0
+#define SELECTIVE_TRACE_OUTPUT_TABLE 1
 
 static const char *output_names[]= { "FILE", "TABLE", NullS };
 static TYPELIB output_typelib=
@@ -179,12 +182,12 @@ try
   if (str != NULL)
   {
     bool ok= is_table_list
-      ? selective_log::parse_filter_lists(NULL, str, &ignored, &bad_token)
-      : selective_log::parse_filter_lists(str, NULL, &ignored, &bad_token);
+      ? selective_trace::parse_filter_lists(NULL, str, &ignored, &bad_token)
+      : selective_trace::parse_filter_lists(str, NULL, &ignored, &bad_token);
     if (!ok)
     {
       my_printf_error(ER_WRONG_VALUE_FOR_VAR,
-                      "selective_log: invalid entry '%s' in %s",
+                      "selective_trace: invalid entry '%s' in %s",
                       MYF(0), bad_token.c_str(),
                       is_table_list ? "tables_to_log (expected schema.table"
                                       " or schema.*)"
@@ -223,7 +226,7 @@ static int rebuild_rules_locked(const char *schemas_csv,
     return 1;
 
   std::string bad_token;
-  if (!selective_log::parse_filter_lists(schemas_csv, tables_csv,
+  if (!selective_trace::parse_filter_lists(schemas_csv, tables_csv,
                                          fresh, &bad_token))
   {
     /* Can't happen after check callbacks, but never swap in bad rules. */
@@ -280,7 +283,7 @@ static void update_tables_to_log(MYSQL_THD thd __attribute__((unused)),
   update_filter_list(var_ptr, save, 1);
 }
 
-static void update_log_file_path(MYSQL_THD thd __attribute__((unused)),
+static void update_file_path(MYSQL_THD thd __attribute__((unused)),
                                  struct st_mysql_sys_var *var
                                    __attribute__((unused)),
                                  void *var_ptr, const void *save)
@@ -301,10 +304,10 @@ static void update_log_file_path(MYSQL_THD thd __attribute__((unused)),
   }
 
   /* Reopen only if the writer is in use; otherwise it opens lazily. */
-  if (opt_enabled && opt_output == SELECTIVE_LOG_OUTPUT_FILE)
-    selective_log::file_writer_reopen(file_path_storage->c_str());
+  if (opt_enabled && opt_output == SELECTIVE_TRACE_OUTPUT_FILE)
+    selective_trace::file_writer_reopen(file_path_storage->c_str());
   else
-    selective_log::file_writer_close();
+    selective_trace::file_writer_close();
 }
 
 static MYSQL_SYSVAR_BOOL(enabled, opt_enabled, PLUGIN_VAR_OPCMDARG,
@@ -326,14 +329,14 @@ static MYSQL_SYSVAR_STR(tables_to_log, opt_tables_to_log,
 
 static MYSQL_SYSVAR_ENUM(output, opt_output, PLUGIN_VAR_RQCMDARG,
   "Log destination. FILE writes one JSON object per line to"
-  " selective_log_log_file_path; TABLE inserts into the plugin log table.",
-  NULL, NULL, SELECTIVE_LOG_OUTPUT_FILE, &output_typelib);
+  " selective_trace_file_path; TABLE inserts into the plugin log table.",
+  NULL, NULL, SELECTIVE_TRACE_OUTPUT_FILE, &output_typelib);
 
-static MYSQL_SYSVAR_STR(log_file_path, opt_log_file_path,
+static MYSQL_SYSVAR_STR(file_path, opt_file_path,
   PLUGIN_VAR_RQCMDARG,
-  "Path of the log file used when selective_log_output=FILE."
+  "Path of the log file used when selective_trace_output=FILE."
   " Relative paths are resolved from the server data directory.",
-  NULL, update_log_file_path, "selective_log.json");
+  NULL, update_file_path, "selective_trace.json");
 
 static MYSQL_SYSVAR_UINT(min_duration_ms, opt_min_duration_ms,
   PLUGIN_VAR_RQCMDARG,
@@ -346,20 +349,20 @@ static MYSQL_SYSVAR_BOOL(mask_passwords, opt_mask_passwords,
   " with *** before logging. On by default.",
   NULL, NULL, TRUE);
 
-static struct st_mysql_sys_var *selective_log_sysvars[]=
+static struct st_mysql_sys_var *selective_trace_sysvars[]=
 {
   MYSQL_SYSVAR(enabled),
   MYSQL_SYSVAR(schemas_to_log),
   MYSQL_SYSVAR(tables_to_log),
   MYSQL_SYSVAR(output),
-  MYSQL_SYSVAR(log_file_path),
+  MYSQL_SYSVAR(file_path),
   MYSQL_SYSVAR(min_duration_ms),
   MYSQL_SYSVAR(mask_passwords),
   MYSQL_SYSVAR(state),
   NULL
 };
 
-/* Status variables (SHOW STATUS LIKE 'selective_log%') */
+/* Status variables (SHOW STATUS LIKE 'selective_trace%') */
 static ulong status_events_logged= 0;
 static ulong status_write_failures= 0;
 static ulong status_events_dropped= 0;
@@ -372,8 +375,8 @@ static int show_write_failures(MYSQL_THD thd __attribute__((unused)),
                                enum enum_var_type scope
                                  __attribute__((unused)))
 {
-  status_write_failures= selective_log::file_writer_failures() +
-                         selective_log::table_writer_failures();
+  status_write_failures= selective_trace::file_writer_failures() +
+                         selective_trace::table_writer_failures();
   var->type= SHOW_ULONG;
   var->value= (char *) &status_write_failures;
   (void) buff;
@@ -388,20 +391,20 @@ static int show_events_dropped(MYSQL_THD thd __attribute__((unused)),
                                enum enum_var_type scope
                                  __attribute__((unused)))
 {
-  status_events_dropped= selective_log::table_writer_dropped();
+  status_events_dropped= selective_trace::table_writer_dropped();
   var->type= SHOW_ULONG;
   var->value= (char *) &status_events_dropped;
   (void) buff;
   return 0;
 }
 
-static struct st_mysql_show_var selective_log_status[]=
+static struct st_mysql_show_var selective_trace_status[]=
 {
-  { "selective_log_events_logged", (char *) &status_events_logged,
+  { "selective_trace_events_logged", (char *) &status_events_logged,
     SHOW_ULONG },
-  SHOW_FUNC_ENTRY("selective_log_write_failures", show_write_failures),
-  SHOW_FUNC_ENTRY("selective_log_events_dropped", show_events_dropped),
-  { "selective_log_callback_errors", (char *) &status_callback_errors,
+  SHOW_FUNC_ENTRY("selective_trace_write_failures", show_write_failures),
+  SHOW_FUNC_ENTRY("selective_trace_events_dropped", show_events_dropped),
+  { "selective_trace_callback_errors", (char *) &status_callback_errors,
     SHOW_ULONG },
   { 0, 0, SHOW_UNDEF }
 };
@@ -473,7 +476,7 @@ static void state_begin_statement(StatementState *st,
   Server-internal bookkeeping tables (engine-independent statistics) get
   locked as a side effect of ordinary DML and are not part of the user's
   query. They are recorded/matched only when explicitly listed in
-  selective_log_tables_to_log.
+  selective_trace_tables_to_log.
 */
 static bool is_internal_stats_table(const char *db, size_t db_len,
                                     const char *tbl, size_t tbl_len)
@@ -564,9 +567,9 @@ static void handle_table_event(MYSQL_THD thd,
   const FilterRules *rules= active_rules;
   if (rules)
   {
-    explicit_cmds= selective_log::match_table(*rules, db, db_len,
+    explicit_cmds= selective_trace::match_table(*rules, db, db_len,
                                               tbl, tbl_len);
-    schema_cmds= selective_log::match_schema(*rules, db, db_len);
+    schema_cmds= selective_trace::match_schema(*rules, db, db_len);
   }
   mysql_rwlock_unlock(&filter_lock);
 
@@ -595,10 +598,10 @@ static void handle_status_event(MYSQL_THD thd,
   /* Which command is this statement? Needed for the per-entry command
      qualifiers, and reused verbatim in the output. */
   char cmdbuf[24];
-  selective_log::extract_command(event->general_query,
+  selective_trace::extract_command(event->general_query,
                                  event->general_query_length,
                                  cmdbuf, sizeof(cmdbuf));
-  const unsigned cmd_bit= selective_log::command_bit(cmdbuf);
+  const unsigned cmd_bit= selective_trace::command_bit(cmdbuf);
 
   unsigned allowed= st->in_statement ? st->cmd_mask : 0;
 
@@ -608,7 +611,7 @@ static void handle_status_event(MYSQL_THD thd,
     mysql_rwlock_rdlock(&filter_lock);
     const FilterRules *rules= active_rules;
     if (rules)
-      allowed|= selective_log::match_schema(*rules, event->database.str,
+      allowed|= selective_trace::match_schema(*rules, event->database.str,
                                             event->database.length);
     mysql_rwlock_unlock(&filter_lock);
   }
@@ -649,13 +652,13 @@ static void handle_status_event(MYSQL_THD thd,
     size_t qlen= event->general_query_length;
     std::string masked;
     if (opt_mask_passwords &&
-        selective_log::mask_secrets(qtext, qlen, &masked))
+        selective_trace::mask_secrets(qtext, qlen, &masked))
     {
       qtext= masked.data();
       qlen= masked.size();
     }
 
-    if (opt_output == SELECTIVE_LOG_OUTPUT_FILE)
+    if (opt_output == SELECTIVE_TRACE_OUTPUT_FILE)
     {
       std::string line;
       line.reserve(320 + event->general_query_length + st->tables_len + 32);
@@ -666,11 +669,11 @@ static void handle_status_event(MYSQL_THD thd,
       line.append(numbuf);
 
       line.append(",\"user\":\"");
-      selective_log::json_escape_append(&line, user_host.data(),
+      selective_trace::json_escape_append(&line, user_host.data(),
                                         user_host.size());
 
       line.append("\",\"db\":\"");
-      selective_log::json_escape_append(&line, event->database.str,
+      selective_trace::json_escape_append(&line, event->database.str,
                                         event->database.length);
 
       line.append("\",\"tables\":[");
@@ -688,7 +691,7 @@ static void handle_status_event(MYSQL_THD thd,
             line.push_back(',');
           first= 0;
           line.push_back('"');
-          selective_log::json_escape_append(&line, p, elen);
+          selective_trace::json_escape_append(&line, p, elen);
           line.push_back('"');
           p+= elen + 1;
         }
@@ -710,19 +713,19 @@ static void handle_status_event(MYSQL_THD thd,
       snprintf(numbuf, sizeof(numbuf), ",\"error_code\":%d,\"query\":\"",
                event->general_error_code);
       line.append(numbuf);
-      selective_log::json_escape_append(&line, qtext, qlen);
+      selective_trace::json_escape_append(&line, qtext, qlen);
       line.append("\"}\n");
 
-      if (selective_log::file_writer_write(line.data(), line.size(),
-                                           opt_log_file_path))
+      if (selective_trace::file_writer_write(line.data(), line.size(),
+                                           opt_file_path))
         status_events_logged++;
     }
-    else                                /* SELECTIVE_LOG_OUTPUT_TABLE */
+    else                                /* SELECTIVE_TRACE_OUTPUT_TABLE */
     {
       std::string sql;
       sql.reserve(400 + event->general_query_length + st->tables_len + 32);
 
-      sql.append("INSERT INTO mysql.selective_log_events"
+      sql.append("INSERT INTO mysql.selective_trace_events"
                  " (`ts`,`conn_id`,`query_id`,`user`,`db`,`tables_involved`,"
                  "`command`,`duration_ms`,`error_code`,`query`) VALUES ('");
       sql.append(ts);
@@ -730,16 +733,16 @@ static void handle_status_event(MYSQL_THD thd,
                event->general_thread_id, event->query_id);
       sql.append(numbuf);
 
-      selective_log::sql_escape_append(&sql, user_host.data(),
+      selective_trace::sql_escape_append(&sql, user_host.data(),
                                        user_host.size());
 
       sql.append("','");
-      selective_log::sql_escape_append(&sql, event->database.str,
+      selective_trace::sql_escape_append(&sql, event->database.str,
                                        event->database.length);
       sql.append("','");
       if (have_tables)
       {
-        selective_log::sql_escape_append(&sql, st->tables, st->tables_len);
+        selective_trace::sql_escape_append(&sql, st->tables, st->tables_len);
         if (st->tables_truncated)
           sql.append(",...");
       }
@@ -755,10 +758,10 @@ static void handle_status_event(MYSQL_THD thd,
 
       snprintf(numbuf, sizeof(numbuf), ",%d,'", event->general_error_code);
       sql.append(numbuf);
-      selective_log::sql_escape_append(&sql, qtext, qlen);
+      selective_trace::sql_escape_append(&sql, qtext, qlen);
       sql.append("')");
 
-      if (selective_log::table_writer_enqueue(&sql))
+      if (selective_trace::table_writer_enqueue(&sql))
         status_events_logged++;
     }
   }
@@ -792,7 +795,7 @@ static void notify_impl(MYSQL_THD thd, unsigned int event_class,
     handle_table_event(thd, (const struct mysql_event_table *) event);
 }
 
-static void selective_log_notify(MYSQL_THD thd,
+static void selective_trace_notify(MYSQL_THD thd,
                                  unsigned int event_class,
                                  const void *event)
 {
@@ -800,7 +803,7 @@ static void selective_log_notify(MYSQL_THD thd,
     return;
 
   /* Never log the internal writer's own INSERTs (self-log loop). */
-  if (selective_log::table_writer_is_self())
+  if (selective_trace::table_writer_is_self())
     return;
 
   /* C boundary: no C++ exception (e.g. bad_alloc while assembling the
@@ -820,22 +823,22 @@ static void selective_log_notify(MYSQL_THD thd,
    init / deinit
    ------------------------------------------------------------------------ */
 
-static int selective_log_init(void *arg __attribute__((unused)))
+static int selective_trace_init(void *arg __attribute__((unused)))
 {
 #ifdef HAVE_PSI_INTERFACE
   if (PSI_server)
-    PSI_server->register_rwlock("selective_log", rwlock_key_list, 1);
+    PSI_server->register_rwlock("selective_trace", rwlock_key_list, 1);
 #endif
   mysql_rwlock_init(key_rwlock_filter, &filter_lock);
-  selective_log::file_writer_init();
-  selective_log::table_writer_init();
+  selective_trace::file_writer_init();
+  selective_trace::table_writer_init();
 
   schemas_storage= new (std::nothrow) std::string(
       opt_schemas_to_log ? opt_schemas_to_log : "");
   tables_storage= new (std::nothrow) std::string(
       opt_tables_to_log ? opt_tables_to_log : "");
   file_path_storage= new (std::nothrow) std::string(
-      opt_log_file_path ? opt_log_file_path : "");
+      opt_file_path ? opt_file_path : "");
   if (schemas_storage == NULL || tables_storage == NULL ||
       file_path_storage == NULL)
     goto fail;
@@ -844,14 +847,14 @@ static int selective_log_init(void *arg __attribute__((unused)))
      callbacks and SHOW VARIABLES always deal with the same memory. */
   opt_schemas_to_log= const_cast<char *>(schemas_storage->c_str());
   opt_tables_to_log= const_cast<char *>(tables_storage->c_str());
-  opt_log_file_path= const_cast<char *>(file_path_storage->c_str());
+  opt_file_path= const_cast<char *>(file_path_storage->c_str());
 
   if (rebuild_rules_locked(schemas_storage->c_str(),
                            tables_storage->c_str()))
     goto fail;
 
   plugin_ready= 1;
-  fprintf(stderr, "selective_log: plugin %s started\n", PLUGIN_STR_VERSION);
+  fprintf(stderr, "selective_trace: plugin %s started\n", PLUGIN_STR_VERSION);
   return 0;
 
 fail:
@@ -859,20 +862,20 @@ fail:
   delete tables_storage;
   delete file_path_storage;
   schemas_storage= tables_storage= file_path_storage= NULL;
-  selective_log::table_writer_shutdown();
-  selective_log::file_writer_deinit();
+  selective_trace::table_writer_shutdown();
+  selective_trace::file_writer_deinit();
   mysql_rwlock_destroy(&filter_lock);
   return 1;
 }
 
-static int selective_log_deinit(void *arg __attribute__((unused)))
+static int selective_trace_deinit(void *arg __attribute__((unused)))
 {
   if (!plugin_ready)
     return 0;
   plugin_ready= 0;
 
-  selective_log::table_writer_shutdown();
-  selective_log::file_writer_deinit();
+  selective_trace::table_writer_shutdown();
+  selective_trace::file_writer_deinit();
 
   delete active_rules;
   active_rules= NULL;
@@ -882,7 +885,7 @@ static int selective_log_deinit(void *arg __attribute__((unused)))
   schemas_storage= tables_storage= file_path_storage= NULL;
 
   mysql_rwlock_destroy(&filter_lock);
-  fprintf(stderr, "selective_log: plugin stopped\n");
+  fprintf(stderr, "selective_trace: plugin stopped\n");
   return 0;
 }
 
@@ -890,27 +893,27 @@ static int selective_log_deinit(void *arg __attribute__((unused)))
    Plugin declaration
    ------------------------------------------------------------------------ */
 
-static struct st_mysql_audit selective_log_descriptor=
+static struct st_mysql_audit selective_trace_descriptor=
 {
   MYSQL_AUDIT_INTERFACE_VERSION,
   NULL,
-  selective_log_notify,
+  selective_trace_notify,
   { MYSQL_AUDIT_GENERAL_CLASSMASK | MYSQL_AUDIT_TABLE_CLASSMASK }
 };
 
-maria_declare_plugin(selective_log)
+maria_declare_plugin(selective_trace)
 {
   MYSQL_AUDIT_PLUGIN,
-  &selective_log_descriptor,
-  "selective_log",
-  "selective_log plugin authors",
-  "Selective query logging by schema/table",
+  &selective_trace_descriptor,
+  "selective_trace",
+  "selective_trace plugin authors",
+  "Selective query tracing by schema/table/command",
   PLUGIN_LICENSE_GPL,
-  selective_log_init,
-  selective_log_deinit,
+  selective_trace_init,
+  selective_trace_deinit,
   PLUGIN_VERSION,
-  selective_log_status,
-  selective_log_sysvars,
+  selective_trace_status,
+  selective_trace_sysvars,
   PLUGIN_STR_VERSION,
   MariaDB_PLUGIN_MATURITY_EXPERIMENTAL
 }

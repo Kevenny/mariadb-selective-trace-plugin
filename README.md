@@ -1,13 +1,18 @@
-# MariaDB Selective Query Log Plugin
+# MariaDB Selective Trace Plugin (`selective_trace`)
 
 [![CI](https://github.com/Kevenny/mariadb-selective-log-plugin/actions/workflows/ci.yml/badge.svg)](https://github.com/Kevenny/mariadb-selective-log-plugin/actions/workflows/ci.yml)
 
-Plugin nativo (open source, GPLv2) para **MariaDB 11.4 e 12.3+** que loga
-queries seletivamente **por schema**, **por tabela** (cross-schema) e **por
-tipo de comando**, como alternativa de baixo overhead ao `general_log`.
+Plugin nativo (open source, GPLv2) para **MariaDB 11.4 e 12.3+** que faz
+**trace seletivo de queries** — rastreia apenas queries de schemas/tabelas
+específicos (e por tipo de comando), ao contrário do `general_log`, que só
+tem o modo tudo-ou-nada. Baixo overhead, ativação a quente por `SET GLOBAL`.
+
+Internamente usa a Audit Plugin API do MariaDB (o único hook que expõe
+schema+tabela resolvidos), mas o propósito é **diagnóstico/observabilidade**,
+não compliance.
 
 **Status: implementado e validado** — filtros dinâmicos, saída FILE (JSON por
-linha) e TABLE (`mysql.selective_log_events`), duração em ms, benchmark e
+linha) e TABLE (`mysql.selective_trace_events`), duração em ms, benchmark e
 Valgrind. Overhead medido: **~0%** (vs **+10%** do `general_log` no mesmo
 cenário sintético) — ver [docs/BENCHMARKS.md](./docs/BENCHMARKS.md).
 
@@ -28,12 +33,12 @@ cenário sintético) — ver [docs/BENCHMARKS.md](./docs/BENCHMARKS.md).
 ## TL;DR de uso
 
 ```sql
-INSTALL PLUGIN selective_log SONAME 'selective_log.so';
-SET GLOBAL selective_log_enabled = ON;
-SET GLOBAL selective_log_schemas_to_log = 'vendas';            -- por schema
-SET GLOBAL selective_log_tables_to_log  = 'rh.salarios,logs.*'; -- por tabela
--- => JSON por linha em selective_log.json (datadir), ou:
-SET GLOBAL selective_log_output = 'TABLE';   -- mysql.selective_log_events
+INSTALL PLUGIN selective_trace SONAME 'selective_trace.so';
+SET GLOBAL selective_trace_enabled = ON;
+SET GLOBAL selective_trace_schemas_to_log = 'vendas';            -- por schema
+SET GLOBAL selective_trace_tables_to_log  = 'rh.salarios,logs.*'; -- por tabela
+-- => JSON por linha em selective_trace.json (datadir), ou:
+SET GLOBAL selective_trace_output = 'TABLE';   -- mysql.selective_trace_events
 ```
 
 Com **ambas** as listas vazias o plugin não loga nada (fail-safe).
@@ -43,11 +48,11 @@ Com **ambas** as listas vazias o plugin não loga nada (fail-safe).
 ```
 .
 ├── src/
-│   ├── selective_log.cc         # entrypoint: descriptor de audit, sysvars, captura
+│   ├── selective_trace.cc         # entrypoint: descriptor de audit, sysvars, captura
 │   ├── filter_engine.{h,cc}     # lógica pura de filtro (sem headers do MariaDB)
 │   ├── log_writer_file.{h,cc}   # modo FILE: JSON por linha via logger service
 │   ├── log_writer_table.{h,cc}  # modo TABLE: thread própria + SQL service
-│   └── CMakeLists.txt           # MYSQL_ADD_PLUGIN(selective_log ... MODULE_ONLY)
+│   └── CMakeLists.txt           # MYSQL_ADD_PLUGIN(selective_trace ... MODULE_ONLY)
 ├── tests/
 │   └── test_filter_logic.cc     # testes standalone do filter_engine (g++ puro)
 ├── scripts/
@@ -96,8 +101,8 @@ docker compose -f docker/docker-compose.yml exec mariadb-test \
 ```
 
 O `docker/test-my.cnf` já carrega o plugin
-(`plugin-load-add=selective_log.so` + `plugin-maturity=experimental`) com o
-filtro inicial `selective_log_schemas_to_log=testdb`.
+(`plugin-load-add=selective_trace.so` + `plugin-maturity=experimental`) com o
+filtro inicial `selective_trace_schemas_to_log=testdb`.
 
 ### 5. Benchmark e Valgrind
 
@@ -116,7 +121,7 @@ mais novos:
 ```bash
 docker compose -f docker/docker-compose.yml --profile ol8 up -d --build dev-ol8
 docker exec mariadb-plugin-dev-ol8 bash -lc 'cd /workspace && ./scripts/build.sh full && ./scripts/build.sh --package'
-# saída: build/plugin_output-ol8/selective_log.so
+# saída: build/plugin_output-ol8/selective_trace.so
 # validação num OL8 limpo com MariaDB 11.4 instalado via RPM oficial:
 docker run --rm -i -v "$PWD/build/plugin_output-ol8:/plugin_out:ro" \
     oraclelinux:8 bash < scripts/validate-ol8.sh
@@ -137,7 +142,7 @@ service); só é preciso um build dedicado contra o fonte 12.3:
 docker compose -f docker/docker-compose.yml --profile v123 up -d --build dev-123-ol8
 docker exec mariadb-plugin-dev-123-ol8 bash -lc \
   './scripts/download-mariadb-source.sh && ./scripts/build.sh full && ./scripts/build.sh --package'
-# saída: build/plugin_output-123-ol9/selective_log.so
+# saída: build/plugin_output-123-ol9/selective_trace.so
 docker run --rm -i -v "$PWD/build/plugin_output-123-ol9:/plugin_out:ro" \
     oraclelinux:9 bash < scripts/validate-123-ol9.sh
 ```

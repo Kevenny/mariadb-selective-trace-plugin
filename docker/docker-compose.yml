@@ -98,7 +98,7 @@ services:
     volumes:
       # mariadbd não aceita subdiretório em plugin-load-add ("No paths allowed
       # for shared library"), então o .so é montado direto no plugin_dir
-      - ../build/plugin_output/selective_log.so:/usr/lib/mysql/plugin/selective_log.so:ro
+      - ../build/plugin_output/selective_trace.so:/usr/lib/mysql/plugin/selective_trace.so:ro
       - ../docker/test-my.cnf:/etc/mysql/conf.d/plugin-test.cnf:ro
     ports:
       - "3308:3306"

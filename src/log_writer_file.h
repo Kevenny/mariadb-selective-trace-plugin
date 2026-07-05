@@ -1,4 +1,4 @@
-/* Copyright (C) 2026 selective_log plugin authors
+/* Copyright (C) 2026 selective_trace plugin authors
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -14,7 +14,7 @@
    Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1335 USA */
 
 /*
-  log_writer_file — FILE output mode for the selective_log plugin.
+  log_writer_file — FILE output mode for the selective_trace plugin.
 
   Thin wrapper around the MariaDB logger service (service_logger.h):
   byte-level thread safety comes from the service's internal mutex, this
@@ -22,13 +22,13 @@
   with an rwlock so concurrent writers never serialize on each other.
 */
 
-#ifndef SELECTIVE_LOG_LOG_WRITER_FILE_H
-#define SELECTIVE_LOG_LOG_WRITER_FILE_H
+#ifndef SELECTIVE_TRACE_LOG_WRITER_FILE_H
+#define SELECTIVE_TRACE_LOG_WRITER_FILE_H
 
 #include <cstddef>
 #include <string>
 
-namespace selective_log {
+namespace selective_trace {
 
 /* Called once from plugin init/deinit. */
 void file_writer_init();
@@ -56,6 +56,6 @@ unsigned long file_writer_failures();
 /* Append src as a JSON string body (no quotes added) into *out. */
 void json_escape_append(std::string *out, const char *src, size_t len);
 
-} /* namespace selective_log */
+} /* namespace selective_trace */
 
-#endif /* SELECTIVE_LOG_LOG_WRITER_FILE_H */
+#endif /* SELECTIVE_TRACE_LOG_WRITER_FILE_H */

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ---------------------------------------------------------------------------
-# validate-123-ol9.sh — valida o selective_log.so buildado para MariaDB
+# validate-123-ol9.sh — valida o selective_trace.so buildado para MariaDB
 # 12.3+ (audit interface 0x0303) num Oracle Linux 9 limpo com MariaDB 12.3
 # instalado via RPM oficial.
 #
@@ -18,17 +18,17 @@ dnf -y install MariaDB-server MariaDB-client >/dev/null
 mariadbd --version
 
 echo ">> [2/4] Instalando o plugin e inicializando o datadir"
-cp /plugin_out/selective_log.so /usr/lib64/mysql/plugin/
+cp /plugin_out/selective_trace.so /usr/lib64/mysql/plugin/
 mariadb-install-db --user=mysql >/dev/null
 
 echo ">> [3/4] Subindo mariadbd com o plugin"
 /usr/sbin/mariadbd --user=mysql --skip-networking \
     --socket=/tmp/m.sock \
-    --plugin-load-add=selective_log.so \
+    --plugin-load-add=selective_trace.so \
     --plugin-maturity=experimental \
-    --selective_log_enabled=ON \
-    --selective_log_schemas_to_log=hotdb \
-    --selective_log_log_file_path=/tmp/selective_log.json \
+    --selective_trace_enabled=ON \
+    --selective_trace_schemas_to_log=hotdb \
+    --selective_trace_file_path=/tmp/selective_trace.json \
     >/tmp/mariadbd.log 2>&1 &
 
 for i in $(seq 1 60); do
@@ -39,7 +39,7 @@ done
 M="mariadb -uroot -S /tmp/m.sock"
 $M -e "SELECT VERSION() AS versao"
 $M -e "SELECT PLUGIN_NAME, PLUGIN_STATUS, PLUGIN_AUTH_VERSION
-       FROM information_schema.PLUGINS WHERE PLUGIN_NAME='selective_log'"
+       FROM information_schema.PLUGINS WHERE PLUGIN_NAME='selective_trace'"
 
 echo ">> [4/4] Smoke test funcional"
 $M --force <<'SQL'
@@ -52,19 +52,19 @@ SELECT * FROM hotdb.t;
 INSERT INTO colddb.t VALUES (9,'fora do filtro');
 SELECT * FROM hotdb.t JOIN colddb.t USING (id);
 SELECT * FROM hotdb.nao_existe;
-SET GLOBAL selective_log_output='TABLE';
+SET GLOBAL selective_trace_output='TABLE';
 UPDATE hotdb.t SET v='table-mode' WHERE id=1;
 DO SLEEP(2);
 SQL
 
 echo "--- arquivo JSON (modo FILE) ---"
-cat /tmp/selective_log.json
-echo "--- tabela mysql.selective_log_events (modo TABLE) ---"
+cat /tmp/selective_trace.json
+echo "--- tabela mysql.selective_trace_events (modo TABLE) ---"
 $M -e "SELECT tables_involved, command, error_code, LEFT(query,50) AS q
-       FROM mysql.selective_log_events"
+       FROM mysql.selective_trace_events"
 echo "--- UNINSTALL/INSTALL ---"
-$M -e "UNINSTALL PLUGIN selective_log;
-       INSTALL PLUGIN selective_log SONAME 'selective_log.so';
+$M -e "UNINSTALL PLUGIN selective_trace;
+       INSTALL PLUGIN selective_trace SONAME 'selective_trace.so';
        SELECT 'servidor vivo' AS status"
 mariadb-admin -uroot -S /tmp/m.sock shutdown
 echo ">> VALIDACAO 12.3 + OL9 CONCLUIDA"

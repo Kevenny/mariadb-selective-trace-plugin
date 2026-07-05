@@ -1,4 +1,4 @@
-/* Copyright (C) 2026 selective_log plugin authors
+/* Copyright (C) 2026 selective_trace plugin authors
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -24,9 +24,9 @@
 
 #include "log_writer_table.h"
 
-namespace selective_log {
+namespace selective_trace {
 
-#define LOG_TABLE_FQN "mysql.selective_log_events"
+#define LOG_TABLE_FQN "mysql.selective_trace_events"
 
 static const char CREATE_LOG_TABLE_SQL[]=
   "CREATE TABLE IF NOT EXISTS " LOG_TABLE_FQN " ("
@@ -41,7 +41,7 @@ static const char CREATE_LOG_TABLE_SQL[]=
   " `duration_ms` DOUBLE NULL,"
   " `error_code` INT NOT NULL DEFAULT 0,"
   " `query` MEDIUMTEXT NOT NULL,"
-  " KEY `idx_selective_log_ts` (`ts`)"
+  " KEY `idx_selective_trace_ts` (`ts`)"
   ") ENGINE=Aria TRANSACTIONAL=0 DEFAULT CHARSET=utf8mb4";
 
 static const size_t QUEUE_MAX_EVENTS= 10000;
@@ -87,7 +87,7 @@ static bool ensure_conn()
     return false;
   if (mysql_real_connect_local(conn) == NULL)
   {
-    fprintf(stderr, "selective_log: internal connection failed: %s\n",
+    fprintf(stderr, "selective_trace: internal connection failed: %s\n",
             mysql_error(conn));
     mysql_close(conn);
     conn= NULL;
@@ -105,12 +105,12 @@ static bool ensure_conn()
     static const char set_mode[]= "SET SESSION sql_mode=''";
     if (mysql_real_query(conn, set_mode,
                          (unsigned long) (sizeof(set_mode) - 1)))
-      fprintf(stderr, "selective_log: could not set writer sql_mode: %s\n",
+      fprintf(stderr, "selective_trace: could not set writer sql_mode: %s\n",
               mysql_error(conn));
   }
   if (mysql_real_query(conn, CREATE_LOG_TABLE_SQL,
                        (unsigned long) (sizeof(CREATE_LOG_TABLE_SQL) - 1)))
-    fprintf(stderr, "selective_log: could not create " LOG_TABLE_FQN ": %s\n",
+    fprintf(stderr, "selective_trace: could not create " LOG_TABLE_FQN ": %s\n",
             mysql_error(conn));
   return true;
 }
@@ -149,7 +149,7 @@ static void run_insert(const std::string &sql)
   if (err != last_logged_errno)         /* don't flood the error log */
   {
     last_logged_errno= err;
-    fprintf(stderr, "selective_log: INSERT into " LOG_TABLE_FQN
+    fprintf(stderr, "selective_trace: INSERT into " LOG_TABLE_FQN
             " failed (errno %u): %s\n", err,
             conn ? mysql_error(conn) : "no connection");
   }
@@ -200,7 +200,7 @@ static bool start_thread_locked()
   stop_requested= 0;
   if (pthread_create(&writer_tid, NULL, writer_thread_func, NULL) != 0)
   {
-    fprintf(stderr, "selective_log: could not start table writer thread\n");
+    fprintf(stderr, "selective_trace: could not start table writer thread\n");
     return false;
   }
   thread_running= 1;
@@ -304,4 +304,4 @@ void sql_escape_append(std::string *out, const char *src, size_t len)
   }
 }
 
-} /* namespace selective_log */
+} /* namespace selective_trace */

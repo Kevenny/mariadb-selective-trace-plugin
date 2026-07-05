@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
 # ---------------------------------------------------------------------------
-# benchmark.sh — Etapa 5: overhead do selective_log vs general_log
+# benchmark.sh — Etapa 5: overhead do selective_trace vs general_log
 #
 # Roda DENTRO do container mariadb-plugin-test (imagem oficial 11.4.4):
 #   docker exec mariadb-plugin-test bash /scripts/benchmark.sh
 # ou copie e execute. Usa mariadb-slap com uma carga mista INSERT+SELECT.
 #
 # Cenários:
-#   1 baseline      — selective_log OFF, general_log OFF
+#   1 baseline      — selective_trace OFF, general_log OFF
 #   2 general_log   — general_log=ON (arquivo)
-#   3 sel_miss      — selective_log ON filtrando bench_hot, carga em bench_cold
+#   3 sel_miss      — selective_trace ON filtrando bench_hot, carga em bench_cold
 #                     (caminho "não loga": só o custo do filtro)
-#   4 sel_hit_file  — selective_log ON, carga em bench_hot, output=FILE
-#   5 sel_hit_table — selective_log ON, carga em bench_hot, output=TABLE
+#   4 sel_hit_file  — selective_trace ON, carga em bench_hot, output=FILE
+#   5 sel_hit_table — selective_trace ON, carga em bench_hot, output=TABLE
 # ---------------------------------------------------------------------------
 set -euo pipefail
 
@@ -37,12 +37,12 @@ prepare() {
 # set_config <enabled> <general_log> <schemas_filter> <output>
 set_config() {
     $MYSQL -e "
-        SET GLOBAL selective_log_enabled=$1;
+        SET GLOBAL selective_trace_enabled=$1;
         SET GLOBAL general_log=$2;
-        SET GLOBAL selective_log_schemas_to_log='$3';
-        SET GLOBAL selective_log_tables_to_log='';
-        SET GLOBAL selective_log_output='$4';
-        SET GLOBAL selective_log_min_duration_ms=0;
+        SET GLOBAL selective_trace_schemas_to_log='$3';
+        SET GLOBAL selective_trace_tables_to_log='';
+        SET GLOBAL selective_trace_output='$4';
+        SET GLOBAL selective_trace_min_duration_ms=0;
     "
 }
 
@@ -132,4 +132,4 @@ scenario_light sel_hit_table_l bench_hot
 
 set_config OFF OFF '' FILE
 echo "== status =="
-$MYSQL -e "SHOW GLOBAL STATUS LIKE 'selective_log%'"
+$MYSQL -e "SHOW GLOBAL STATUS LIKE 'selective_trace%'"

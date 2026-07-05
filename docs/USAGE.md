@@ -1,6 +1,6 @@
-# USAGE.md — Guia de uso do plugin `selective_log`
+# USAGE.md — Guia de uso do plugin `selective_trace`
 
-Plugin de auditoria seletiva para **MariaDB 11.4** que loga apenas queries
+Plugin de trace seletivo para **MariaDB 11.4 e 12.3+** que loga apenas queries
 que tocam schemas/tabelas configurados — uma alternativa de baixo overhead ao
 `general_log`.
 
@@ -13,9 +13,9 @@ servidor:
 
 | Plataforma / série do servidor | Build |
 |---|---|
-| Ubuntu 22.04+/Debian · MariaDB 11.4 (glibc ≥ 2.35) | `build/plugin_output/selective_log.so` (container `dev`) |
-| Oracle Linux / RHEL / Rocky / Alma **8 e 9** · MariaDB **11.4** | `build/plugin_output-ol8/selective_log.so` (container `dev-ol8`, glibc ≥ 2.17) |
-| Oracle Linux / RHEL 8+ · MariaDB **12.3+** | `build/plugin_output-123-ol9/selective_log.so` (container `dev-123-ol8`) |
+| Ubuntu 22.04+/Debian · MariaDB 11.4 (glibc ≥ 2.35) | `build/plugin_output/selective_trace.so` (container `dev`) |
+| Oracle Linux / RHEL / Rocky / Alma **8 e 9** · MariaDB **11.4** | `build/plugin_output-ol8/selective_trace.so` (container `dev-ol8`, glibc ≥ 2.17) |
+| Oracle Linux / RHEL 8+ · MariaDB **12.3+** | `build/plugin_output-123-ol9/selective_trace.so` (container `dev-123-ol8`) |
 | Windows | não suportado nesta versão (código usa POSIX; porte viável, ver README) |
 
 Os builds EL exigem só GLIBC_2.17+, então carregam em EL8, EL9 e distros
@@ -64,18 +64,18 @@ No servidor de destino (OL8+ com MariaDB via RPM), o `plugin_dir` é
 
 ## 1. Instalação
 
-Copie `selective_log.so` para o `plugin_dir` do servidor (confira com
+Copie `selective_trace.so` para o `plugin_dir` do servidor (confira com
 `SHOW GLOBAL VARIABLES LIKE 'plugin_dir'`) e:
 
 ```sql
-INSTALL PLUGIN selective_log SONAME 'selective_log.so';
+INSTALL PLUGIN selective_trace SONAME 'selective_trace.so';
 ```
 
 Ou via configuração (carrega no startup):
 
 ```ini
 [mysqld]
-plugin-load-add=selective_log.so
+plugin-load-add=selective_trace.so
 # o plugin declara maturity "experimental"; libere se o servidor usar o
 # default (gamma):
 plugin-maturity=experimental
@@ -84,7 +84,7 @@ plugin-maturity=experimental
 Para remover:
 
 ```sql
-UNINSTALL PLUGIN selective_log;
+UNINSTALL PLUGIN selective_trace;
 ```
 
 > O plugin **não** exige `general_log=ON` — os eventos de audit são
@@ -96,13 +96,13 @@ Todas dinâmicas (`SET GLOBAL`), sem restart:
 
 | Variável | Tipo | Default | Descrição |
 |---|---|---|---|
-| `selective_log_enabled` | BOOL | `OFF` | Liga/desliga a captura |
-| `selective_log_schemas_to_log` | VARCHAR | `''` | Lista de schemas separados por vírgula |
-| `selective_log_tables_to_log` | VARCHAR | `''` | Lista `schema.tabela` separada por vírgula (cross-schema); `schema.*` = todo o schema |
-| `selective_log_output` | ENUM | `FILE` | `FILE` (JSON por linha) ou `TABLE` (`mysql.selective_log_events`) |
-| `selective_log_log_file_path` | VARCHAR | `selective_log.json` | Arquivo de log no modo FILE (relativo = datadir) |
-| `selective_log_min_duration_ms` | INT | `0` | Só loga queries mais lentas que N ms (0 = todas) |
-| `selective_log_mask_passwords` | BOOL | `ON` | Substitui senhas de DCL (`IDENTIFIED BY`, `SET PASSWORD`, `PASSWORD()`) por `***` antes de logar |
+| `selective_trace_enabled` | BOOL | `OFF` | Liga/desliga a captura |
+| `selective_trace_schemas_to_log` | VARCHAR | `''` | Lista de schemas separados por vírgula |
+| `selective_trace_tables_to_log` | VARCHAR | `''` | Lista `schema.tabela` separada por vírgula (cross-schema); `schema.*` = todo o schema |
+| `selective_trace_output` | ENUM | `FILE` | `FILE` (JSON por linha) ou `TABLE` (`mysql.selective_trace_events`) |
+| `selective_trace_file_path` | VARCHAR | `selective_trace.json` | Arquivo de log no modo FILE (relativo = datadir) |
+| `selective_trace_min_duration_ms` | INT | `0` | Só loga queries mais lentas que N ms (0 = todas) |
+| `selective_trace_mask_passwords` | BOOL | `ON` | Substitui senhas de DCL (`IDENTIFIED BY`, `SET PASSWORD`, `PASSWORD()`) por `***` antes de logar |
 
 ### Filtro por tipo de comando (por entrada)
 
@@ -111,10 +111,10 @@ restringindo **quais comandos** são logados para aquele schema/tabela:
 
 ```sql
 -- schema "vendas" só INSERT e UPDATE; schema "rh" tudo
-SET GLOBAL selective_log_schemas_to_log = 'vendas:insert|update, rh';
+SET GLOBAL selective_trace_schemas_to_log = 'vendas:insert|update, rh';
 
 -- tabela app.pedidos só DELETE; todo o schema logs só DML
-SET GLOBAL selective_log_tables_to_log = 'app.pedidos:delete, logs.*:dml';
+SET GLOBAL selective_trace_tables_to_log = 'app.pedidos:delete, logs.*:dml';
 ```
 
 Tokens válidos: `select`, `insert`, `update`, `delete`, `replace`, `load`,
@@ -143,8 +143,8 @@ que não são classificáveis caem em `other`.
 - Valores inválidos são rejeitados na hora do `SET GLOBAL`:
 
 ```
-SET GLOBAL selective_log_tables_to_log='nodot';
-ERROR 1231: selective_log: invalid entry 'nodot' in tables_to_log
+SET GLOBAL selective_trace_tables_to_log='nodot';
+ERROR 1231: selective_trace: invalid entry 'nodot' in tables_to_log
             (expected schema.table or schema.*)
 ```
 
@@ -152,24 +152,24 @@ ERROR 1231: selective_log: invalid entry 'nodot' in tables_to_log
 
 ```sql
 -- Auditar tudo que tocar o schema de produção "vendas"
-SET GLOBAL selective_log_schemas_to_log = 'vendas';
-SET GLOBAL selective_log_enabled = ON;
+SET GLOBAL selective_trace_schemas_to_log = 'vendas';
+SET GLOBAL selective_trace_enabled = ON;
 
 -- Auditar só duas tabelas sensíveis, independente do schema da sessão
-SET GLOBAL selective_log_schemas_to_log = '';
-SET GLOBAL selective_log_tables_to_log = 'rh.salarios,financeiro.pagamentos';
+SET GLOBAL selective_trace_schemas_to_log = '';
+SET GLOBAL selective_trace_tables_to_log = 'rh.salarios,financeiro.pagamentos';
 
 -- Todo o schema "logs" + uma tabela avulsa
-SET GLOBAL selective_log_tables_to_log = 'logs.*,app.pedidos';
+SET GLOBAL selective_trace_tables_to_log = 'logs.*,app.pedidos';
 
 -- Só queries lentas (>250ms) do schema app
-SET GLOBAL selective_log_schemas_to_log = 'app';
-SET GLOBAL selective_log_min_duration_ms = 250;
+SET GLOBAL selective_trace_schemas_to_log = 'app';
+SET GLOBAL selective_trace_min_duration_ms = 250;
 ```
 
 ## 3. Modo FILE (default)
 
-Uma linha JSON por evento em `selective_log_log_file_path`:
+Uma linha JSON por evento em `selective_trace_file_path`:
 
 ```json
 {"ts":"2026-07-04 03:33:44.401","conn_id":4,"query_id":7,
@@ -198,12 +198,12 @@ Notas:
   `mysql.column_stats`, `mysql.index_stats`, `mysql.innodb_table_stats`,
   `mysql.innodb_index_stats`) são tocadas como efeito colateral de DML comum
   e **não** entram em `tables` — a menos que estejam explicitamente em
-  `selective_log_tables_to_log`.
+  `selective_trace_tables_to_log`.
 - `command` ignora comentários iniciais de todos os sabores (`-- `, `#`,
   `/* */`, `/*! */`, `/*M! */`) e parênteses — um `INSERT` enviado com
   comentário anexado (comportamento padrão do DBeaver) classifica como
   `INSERT`. O campo `query` preserva o texto exato recebido, comentários
-  incluídos (fidelidade de auditoria, como o general_log).
+  incluídos (fidelidade de trace, como o general_log).
 - Se um statement tocar tabelas demais para o buffer por conexão (~3,9 KB de
   nomes), o JSON ganha `"tables_truncated":true` (na tabela de log, a lista
   termina em `,...`).
@@ -211,19 +211,19 @@ Notas:
   (um por sub-statement, com suas tabelas), além do evento do `CALL`.
 - O arquivo não tem rotação por tamanho — use logrotate/Fluentd/Filebeat.
 - O caminho é reaberto automaticamente ao mudar
-  `selective_log_log_file_path`.
+  `selective_trace_file_path`.
 
 ## 4. Modo TABLE
 
 ```sql
-SET GLOBAL selective_log_output = 'TABLE';
+SET GLOBAL selective_trace_output = 'TABLE';
 ```
 
-Os eventos são inseridos em **`mysql.selective_log_events`** (criada
+Os eventos são inseridos em **`mysql.selective_trace_events`** (criada
 automaticamente no primeiro uso):
 
 ```sql
-CREATE TABLE mysql.selective_log_events (
+CREATE TABLE mysql.selective_trace_events (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
   ts DATETIME(3) NOT NULL,
   conn_id BIGINT UNSIGNED NOT NULL,
@@ -235,7 +235,7 @@ CREATE TABLE mysql.selective_log_events (
   duration_ms DOUBLE NULL,
   error_code INT NOT NULL DEFAULT 0,
   query MEDIUMTEXT NOT NULL,
-  KEY idx_selective_log_ts (ts)
+  KEY idx_selective_trace_ts (ts)
 ) ENGINE=Aria TRANSACTIONAL=0 DEFAULT CHARSET=utf8mb4;
 ```
 
@@ -244,18 +244,18 @@ Como funciona por baixo:
   (até 10000 eventos) e executa os INSERTs numa conexão interna com
   `sql_log_bin=0` (não replica). Eventos podem levar alguns ms para aparecer.
 - Se a fila encher (burst maior que a vazão de INSERT), eventos são
-  descartados e contados em `Selective_log_events_dropped`.
+  descartados e contados em `Selective_trace_events_dropped`.
 - O plugin **nunca loga os próprios INSERTs** (guard de reentrância por
   thread) — sem loop de auto-log, mesmo com `mysql` no filtro.
 - Se a tabela for dropada, é recriada no INSERT seguinte.
 
-## 5. Status (`SHOW GLOBAL STATUS LIKE 'selective_log%'`)
+## 5. Status (`SHOW GLOBAL STATUS LIKE 'selective_trace%'`)
 
 | Variável | Significado |
 |---|---|
-| `Selective_log_events_logged` | Eventos aceitos (escritos ou enfileirados) |
-| `Selective_log_write_failures` | Falhas de escrita (arquivo + tabela) |
-| `Selective_log_events_dropped` | Eventos descartados por fila cheia (modo TABLE) |
+| `Selective_trace_events_logged` | Eventos aceitos (escritos ou enfileirados) |
+| `Selective_trace_write_failures` | Falhas de escrita (arquivo + tabela) |
+| `Selective_trace_events_dropped` | Eventos descartados por fila cheia (modo TABLE) |
 
 ## 6. Limitações conhecidas
 

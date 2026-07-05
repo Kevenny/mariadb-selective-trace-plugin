@@ -1,5 +1,13 @@
 # CLAUDE.md — Especificação para Implementação do Plugin `selective_log`
 
+> **Nota histórica (v0.7.0)**: o plugin foi renomeado de `selective_log` para
+> **`selective_trace`**, reposicionado como *trace seletivo de queries*
+> (diagnóstico/observabilidade), não auditoria/compliance. O mecanismo interno
+> (Audit Plugin API) e o comportamento não mudaram — só o nome, as variáveis
+> (`selective_trace_*`), a tabela (`mysql.selective_trace_events`) e a
+> narrativa. Este arquivo preserva o briefing original com o nome antigo por
+> valor histórico; a documentação atual está em `README.md` e `docs/`.
+
 > Este arquivo é o briefing principal para o **Claude Code**. Leia-o por completo
 > antes de escrever qualquer código. Ele contém contexto, requisitos, restrições
 > técnicas e o passo a passo esperado de implementação.

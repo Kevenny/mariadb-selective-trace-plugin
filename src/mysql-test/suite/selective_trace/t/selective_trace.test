@@ -1,42 +1,42 @@
-# Integration tests for the selective_log audit plugin.
+# Integration tests for the selective_trace audit plugin.
 #
 # Covers the observable contract: dynamic sysvars, validation of the filter
 # lists and command qualifiers, schema/table filtering with the FILE output,
 # the fail-safe (empty filters log nothing), and password masking. Run with:
-#   ./mtr --suite=selective_log
+#   ./mtr --suite=selective_trace
 #
-# Each case uses its own log file (changing selective_log_log_file_path
+# Each case uses its own log file (changing selective_trace_file_path
 # reopens the writer), so cases never race on a shared handle.
 
 --source include/not_embedded.inc
 
-if (!$SELECTIVE_LOG_SO) {
-  --skip No SELECTIVE_LOG plugin
+if (!$SELECTIVE_TRACE_SO) {
+  --skip No SELECTIVE_TRACE plugin
 }
 
 --disable_ps2_protocol
 
 let $MYSQLD_DATADIR= `SELECT @@datadir`;
 
-install plugin selective_log soname 'selective_log';
+install plugin selective_trace soname 'selective_trace';
 
 --echo #
 --echo # 1. Plugin loaded, all system variables present with defaults
 --echo #
-show variables like 'selective_log%';
+show variables like 'selective_trace%';
 
 --echo #
 --echo # 2. Filter-list validation (bad entries are rejected)
 --echo #
 --error ER_WRONG_VALUE_FOR_VAR
-set global selective_log_schemas_to_log= 'a.b';
+set global selective_trace_schemas_to_log= 'a.b';
 --error ER_WRONG_VALUE_FOR_VAR
-set global selective_log_tables_to_log= 'nodot';
+set global selective_trace_tables_to_log= 'nodot';
 --error ER_WRONG_VALUE_FOR_VAR
-set global selective_log_tables_to_log= 'schema.table.extra';
+set global selective_trace_tables_to_log= 'schema.table.extra';
 # command qualifier with an unknown token
 --error ER_WRONG_VALUE_FOR_VAR
-set global selective_log_schemas_to_log= 'db:banana';
+set global selective_trace_schemas_to_log= 'db:banana';
 
 create database sl_hot;
 create database sl_cold;
@@ -46,11 +46,11 @@ create table sl_cold.t (id int primary key, v varchar(32));
 --echo #
 --echo # 3. Schema filter, FILE output — only the filtered schema is logged
 --echo #
-set global selective_log_output= 'FILE';
-set global selective_log_log_file_path= 'sl_case3.json';
-set global selective_log_schemas_to_log= 'sl_hot';
-set global selective_log_tables_to_log= '';
-set global selective_log_enabled= ON;
+set global selective_trace_output= 'FILE';
+set global selective_trace_file_path= 'sl_case3.json';
+set global selective_trace_schemas_to_log= 'sl_hot';
+set global selective_trace_tables_to_log= '';
+set global selective_trace_enabled= ON;
 
 insert into sl_hot.t values (1,'logged');
 insert into sl_cold.t values (2,'not logged');
@@ -66,11 +66,11 @@ let SEARCH_PATTERN= sl_cold;
 --echo #
 --echo # 4. Table filter is cross-schema and command-qualified (:insert)
 --echo #
-set global selective_log_enabled= OFF;
-set global selective_log_log_file_path= 'sl_case4.json';
-set global selective_log_schemas_to_log= '';
-set global selective_log_tables_to_log= 'sl_cold.t:insert';
-set global selective_log_enabled= ON;
+set global selective_trace_enabled= OFF;
+set global selective_trace_file_path= 'sl_case4.json';
+set global selective_trace_schemas_to_log= '';
+set global selective_trace_tables_to_log= 'sl_cold.t:insert';
+set global selective_trace_enabled= ON;
 
 insert into sl_cold.t values (3,'insert logged');
 update sl_cold.t set v='update skipped' where id=3;
@@ -88,11 +88,11 @@ let SEARCH_PATTERN= "command":"DELETE";
 --echo #
 --echo # 5. Fail-safe: both filter lists empty logs nothing
 --echo #
-set global selective_log_enabled= OFF;
-set global selective_log_log_file_path= 'sl_case5.json';
-set global selective_log_schemas_to_log= '';
-set global selective_log_tables_to_log= '';
-set global selective_log_enabled= ON;
+set global selective_trace_enabled= OFF;
+set global selective_trace_file_path= 'sl_case5.json';
+set global selective_trace_schemas_to_log= '';
+set global selective_trace_tables_to_log= '';
+set global selective_trace_enabled= ON;
 
 insert into sl_hot.t values (10,'x');
 select v from sl_hot.t where id = 10;
@@ -104,10 +104,10 @@ select v from sl_hot.t where id = 10;
 --echo #
 --echo # 6. Password masking on by default (DCL secret becomes ***)
 --echo #
-set global selective_log_enabled= OFF;
-set global selective_log_log_file_path= 'sl_case6.json';
-set global selective_log_schemas_to_log= 'sl_hot,mysql';
-set global selective_log_enabled= ON;
+set global selective_trace_enabled= OFF;
+set global selective_trace_file_path= 'sl_case6.json';
+set global selective_trace_schemas_to_log= 'sl_hot,mysql';
+set global selective_trace_enabled= ON;
 
 create user sl_user@localhost identified by 'PlaintextSecret';
 
@@ -123,10 +123,10 @@ drop user sl_user@localhost;
 --echo #
 --echo # 7. Clean up
 --echo #
-set global selective_log_enabled= OFF;
+set global selective_trace_enabled= OFF;
 drop database sl_hot;
 drop database sl_cold;
 --remove_file $MYSQLD_DATADIR/sl_case3.json
 --remove_file $MYSQLD_DATADIR/sl_case4.json
 --remove_file $MYSQLD_DATADIR/sl_case6.json
-uninstall plugin selective_log;
+uninstall plugin selective_trace;

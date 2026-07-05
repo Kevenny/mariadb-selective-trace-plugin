@@ -1,8 +1,10 @@
-# Contribuindo com o `selective_log`
+# Contribuindo com o `selective_trace`
 
-Obrigado pelo interesse! Este é um plugin de auditoria para MariaDB
-(11.4 e 12.3+), licenciado sob **GPLv2** — a mesma licença do MariaDB
-Server, para permitir eventual inclusão upstream.
+Obrigado pelo interesse! Este é um plugin de **trace seletivo de queries**
+para MariaDB (11.4 e 12.3+) — permite rastrear queries de schemas/tabelas
+específicos, ao contrário do `general_log`, que é tudo-ou-nada. Licenciado
+sob **GPLv2** (a mesma licença do MariaDB Server, para permitir eventual
+inclusão upstream).
 
 ## Como reportar bugs / pedir features
 
@@ -10,7 +12,7 @@ Abra uma issue no repositório descrevendo:
 
 - Versão do plugin (`SHOW GLOBAL STATUS` / `PLUGIN_AUTH_VERSION` em
   `information_schema.PLUGINS`), série do MariaDB e distro/arquitetura.
-- Configuração relevante (`SHOW GLOBAL VARIABLES LIKE 'selective_log%'`).
+- Configuração relevante (`SHOW GLOBAL VARIABLES LIKE 'selective_trace%'`).
 - Passos de reprodução. Para bugs de crash, o trecho do error log.
 
 Questões de **segurança** sensíveis: contato privado ao mantenedor antes de

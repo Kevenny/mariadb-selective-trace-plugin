@@ -1,4 +1,4 @@
-# SECURITY.md — Modelo de ameaças e hardening do `selective_log`
+# SECURITY.md — Modelo de ameaças e hardening do `selective_trace`
 
 Validação de segurança adversarial do plugin, com foco em Oracle Linux 9.
 Bateria reproduzível em [`scripts/security-test.sh`](../scripts/security-test.sh)
@@ -11,7 +11,7 @@ Bateria reproduzível em [`scripts/security-test.sh`](../scripts/security-test.s
 O plugin recebe, por evento de audit, dados controlados pelo cliente
 (texto da query, `user@host`, nomes de schema/tabela resolvidos pelo parser)
 e os grava em dois destinos: arquivo JSON (modo FILE) ou
-`INSERT INTO mysql.selective_log_events` (modo TABLE). Os vetores são a
+`INSERT INTO mysql.selective_trace_events` (modo TABLE). Os vetores são a
 **injeção** desses dados no formato de saída e o **vazamento** de dados
 sensíveis presentes nas próprias queries.
 
@@ -54,9 +54,9 @@ MariaDB 11.4.12 e MariaDB 12.3.2 (RPMs oficiais em `oraclelinux:9`).
 (via `\uXXXX`) — impossível injetar nova-linha (quebraria o "um evento por
 linha") ou fechar/reabrir o objeto JSON.
 
-### 3. Mascaramento de credenciais (`selective_log_mask_passwords`, default ON)
+### 3. Mascaramento de credenciais (`selective_trace_mask_passwords`, default ON)
 
-Como o plugin registra o texto completo da query (fidelidade de auditoria,
+Como o plugin registra o texto completo da query (fidelidade de trace,
 como o general_log), statements de DCL exporiam senhas. `mask_secrets()`
 substitui por `***` os literais de:
 
@@ -69,7 +69,7 @@ substitui por `***` os literais de:
 Matching case-insensitive, respeita fronteira de palavra (uma coluna
 `password_hash` ou o texto `'my password'` num INSERT comum **não** disparam
 mascaramento) e lida com aspas escapadas dentro do segredo. Desligável com
-`SET GLOBAL selective_log_mask_passwords=OFF` se você precisar do texto
+`SET GLOBAL selective_trace_mask_passwords=OFF` se você precisar do texto
 íntegro num ambiente controlado.
 
 > **Limitação honesta**: o mascaramento cobre as cláusulas de autenticação
@@ -89,8 +89,8 @@ O `mariadbd` roda confinado no domínio `mysqld_t`. Dois pontos:
    contexto correto senão o SELinux bloqueia o `dlopen`:
 
    ```bash
-   cp selective_log.so /usr/lib64/mysql/plugin/
-   restorecon -v /usr/lib64/mysql/plugin/selective_log.so
+   cp selective_trace.so /usr/lib64/mysql/plugin/
+   restorecon -v /usr/lib64/mysql/plugin/selective_trace.so
    # (rótulo esperado: system_u:object_r:lib_t ou mysqld_plugin_exec_t)
    ```
 
@@ -99,7 +99,7 @@ O `mariadbd` roda confinado no domínio `mysqld_t`. Dois pontos:
    (`/var/lib/mysql/…`, default) ou de um diretório com rótulo adequado. Um
    path arbitrário (ex.: `/root`, `/tmp`) será **negado pelo SELinux**, não
    por bug do plugin — o plugin apenas registra a falha
-   (`Selective_log_write_failures`) sem derrubar o servidor (validado em T6).
+   (`Selective_trace_write_failures`) sem derrubar o servidor (validado em T6).
    Para um diretório dedicado:
 
    ```bash
@@ -120,20 +120,20 @@ O `mariadbd` roda confinado no domínio `mysqld_t`. Dois pontos:
   senhas mascaradas). Restrinja e rotacione:
 
   ```bash
-  chmod 640 /var/lib/mysql/selective_log.json   # se quiser tirar o grupo
+  chmod 640 /var/lib/mysql/selective_trace.json   # se quiser tirar o grupo
   # logrotate: rotacione com create 0640 mysql mysql
   ```
 
-- Modo TABLE: `mysql.selective_log_events` herda as permissões do schema
+- Modo TABLE: `mysql.selective_trace_events` herda as permissões do schema
   `mysql` (acesso já restrito a admins). Faça expurgo periódico.
 
 ## Boas práticas operacionais
 
 - **Filtro mínimo**: audite só o necessário — reduz volume e exposição.
-- **Monitore** `SHOW GLOBAL STATUS LIKE 'selective_log%'`:
+- **Monitore** `SHOW GLOBAL STATUS LIKE 'selective_trace%'`:
   `write_failures` (path/SELinux/disco), `events_dropped` (fila TABLE cheia),
   `callback_errors` (pressão de memória).
-- **Kill-switch**: `SET GLOBAL selective_log_enabled=OFF` a quente.
+- **Kill-switch**: `SET GLOBAL selective_trace_enabled=OFF` a quente.
 - **Maturity EXPERIMENTAL**: o servidor recusa carregar por default; quem
   instala libera conscientemente com `plugin-maturity=experimental`.
 

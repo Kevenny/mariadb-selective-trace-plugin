@@ -1,4 +1,4 @@
-# BENCHMARKS.md — Overhead do `selective_log` vs `general_log`
+# BENCHMARKS.md — Overhead do `selective_trace` vs `general_log`
 
 Medições da Etapa 5, executadas com [`scripts/benchmark.sh`](../scripts/benchmark.sh)
 no container `mariadb-plugin-test` (imagem oficial `mariadb:11.4.4`).
@@ -15,10 +15,10 @@ no container `mariadb-plugin-test` (imagem oficial `mariadb:11.4.4`).
 
 | Cenário | Configuração |
 |---|---|
-| `baseline` | `selective_log_enabled=OFF`, `general_log=OFF` |
+| `baseline` | `selective_trace_enabled=OFF`, `general_log=OFF` |
 | `general_log` | `general_log=ON` (arquivo) |
-| `sel_miss` | selective_log ON filtrando `bench_hot`, carga em `bench_cold` — caminho **"não loga"** (só o custo do filtro) |
-| `sel_hit_file` | selective_log ON, carga em `bench_hot`, `output=FILE` — **toda query logada** |
+| `sel_miss` | selective_trace ON filtrando `bench_hot`, carga em `bench_cold` — caminho **"não loga"** (só o custo do filtro) |
+| `sel_hit_file` | selective_trace ON, carga em `bench_hot`, `output=FILE` — **toda query logada** |
 | `sel_hit_table` | idem com `output=TABLE` (INSERT assíncrono) |
 
 ## Suíte MIX — carga realista (INSERT + SELECT indexado)
@@ -36,7 +36,7 @@ no container `mariadb-plugin-test` (imagem oficial `mariadb:11.4.4`).
 **Leitura**: a ~7.300 qps com round-trip de cliente e I/O de InnoDB dominando,
 **nenhum** mecanismo de log (nem o general_log) produz overhead mensurável —
 as diferenças (±2%) são ruído entre rodadas. Nessa carga o argumento de
-performance é irrelevante; o valor do selective_log é **volume de log**
+performance é irrelevante; o valor do selective_trace é **volume de log**
 (só o que interessa) e formato estruturado.
 
 ## Suíte LIGHT — custo do caminho de log isolado (`DO 1`)
@@ -53,7 +53,7 @@ próximo de zero → o custo do log fica proporcionalmente visível):
 | sel_hit_table | 0,954 | 62.900 | −0,8% (≈ ruído)¹ |
 
 ¹ No `sel_hit_table` a 60k+ eventos/s a fila do writer assíncrono saturou e
-descartou 66.257 eventos (`Selective_log_events_dropped`) — **por design**: em
+descartou 66.257 eventos (`Selective_trace_events_dropped`) — **por design**: em
 burst acima da vazão de INSERT, o plugin descarta e contabiliza em vez de
 frear as queries dos usuários. Na suíte MIX (7,3k qps) não houve nenhum drop.
 
@@ -64,11 +64,11 @@ frear as queries dos usuários. Na suíte MIX (7,3k qps) não houve nenhum drop.
    62k qps. É o cenário de produção típico (filtro restrito, maioria do
    tráfego fora dele).
 2. **Overhead sensivelmente menor que `general_log=ON`**: no pior caso
-   sintético o general_log custou **+10,1%**, enquanto o selective_log ficou
+   sintético o general_log custou **+10,1%**, enquanto o selective_trace ficou
    em **~0%** em todos os modos — inclusive **logando 100% das queries** em
    FILE (escrita síncrona via logger service) e TABLE (assíncrona).
 3. O modo TABLE protege a latência das queries sob burst à custa de
-   possíveis descartes (monitoráveis via `Selective_log_events_dropped`);
+   possíveis descartes (monitoráveis via `Selective_trace_events_dropped`);
    para auditoria sem perda em alto volume, prefira `output=FILE`.
 
 ## Como reproduzir
@@ -126,7 +126,7 @@ com o plugin ativo no cenário realista.
 - **Modo TABLE**: acompanhou ~29k qps (≈ 4.900 INSERTs/s no writer) sem um
   único drop — a fila só descartou no teste sintético anterior a 60k+
   eventos/s. Na taxa real (333/s) opera com folga de ordens de magnitude;
-  atenção apenas ao crescimento da `mysql.selective_log_events` (mesmo
+  atenção apenas ao crescimento da `mysql.selective_trace_events` (mesmo
   ~224 B/evento + índice) — expurgo periódico recomendado.
 
 ### Mesmo teste em Oracle Linux 8 (MariaDB 11.4.12 via RPM oficial)

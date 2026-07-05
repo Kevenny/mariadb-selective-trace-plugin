@@ -1,0 +1,93 @@
+install plugin selective_trace soname 'selective_trace';
+#
+# 1. Plugin loaded, all system variables present with defaults
+#
+show variables like 'selective_trace%';
+Variable_name	Value
+selective_trace_enabled	OFF
+selective_trace_file_path	selective_trace.json
+selective_trace_mask_passwords	ON
+selective_trace_min_duration_ms	0
+selective_trace_output	FILE
+selective_trace_schemas_to_log	
+selective_trace_tables_to_log	
+#
+# 2. Filter-list validation (bad entries are rejected)
+#
+set global selective_trace_schemas_to_log= 'a.b';
+ERROR 42000: selective_trace: invalid entry 'a.b' in schemas_to_log
+set global selective_trace_tables_to_log= 'nodot';
+ERROR 42000: selective_trace: invalid entry 'nodot' in tables_to_log (expected schema.table or schema.*)
+set global selective_trace_tables_to_log= 'schema.table.extra';
+ERROR 42000: selective_trace: invalid entry 'schema.table.extra' in tables_to_log (expected schema.table or schema.*)
+set global selective_trace_schemas_to_log= 'db:banana';
+ERROR 42000: selective_trace: invalid entry 'db:banana' in schemas_to_log
+create database sl_hot;
+create database sl_cold;
+create table sl_hot.t (id int primary key, v varchar(32));
+create table sl_cold.t (id int primary key, v varchar(32));
+#
+# 3. Schema filter, FILE output — only the filtered schema is logged
+#
+set global selective_trace_output= 'FILE';
+set global selective_trace_file_path= 'sl_case3.json';
+set global selective_trace_schemas_to_log= 'sl_hot';
+set global selective_trace_tables_to_log= '';
+set global selective_trace_enabled= ON;
+insert into sl_hot.t values (1,'logged');
+insert into sl_cold.t values (2,'not logged');
+select v from sl_hot.t where id = 1;
+v
+logged
+# sl_hot.t must appear, sl_cold.t must not
+FOUND 2 /"tables":\["sl_hot.t"\]/ in sl_case3.json
+NOT FOUND /sl_cold/ in sl_case3.json
+#
+# 4. Table filter is cross-schema and command-qualified (:insert)
+#
+set global selective_trace_enabled= OFF;
+set global selective_trace_file_path= 'sl_case4.json';
+set global selective_trace_schemas_to_log= '';
+set global selective_trace_tables_to_log= 'sl_cold.t:insert';
+set global selective_trace_enabled= ON;
+insert into sl_cold.t values (3,'insert logged');
+update sl_cold.t set v='update skipped' where id=3;
+delete from sl_cold.t where id=2;
+FOUND 1 /"command":"INSERT"/ in sl_case4.json
+# UPDATE/DELETE must be absent (qualifier is :insert only)
+NOT FOUND /"command":"UPDATE"/ in sl_case4.json
+NOT FOUND /"command":"DELETE"/ in sl_case4.json
+#
+# 5. Fail-safe: both filter lists empty logs nothing
+#
+set global selective_trace_enabled= OFF;
+set global selective_trace_file_path= 'sl_case5.json';
+set global selective_trace_schemas_to_log= '';
+set global selective_trace_tables_to_log= '';
+set global selective_trace_enabled= ON;
+insert into sl_hot.t values (10,'x');
+select v from sl_hot.t where id = 10;
+v
+x
+# no log file is created when nothing matches
+#
+# 6. Password masking on by default (DCL secret becomes ***)
+#
+set global selective_trace_enabled= OFF;
+set global selective_trace_file_path= 'sl_case6.json';
+set global selective_trace_schemas_to_log= 'sl_hot,mysql';
+set global selective_trace_enabled= ON;
+create user sl_user@localhost identified by 'PlaintextSecret';
+FOUND 1 /\*\*\*/ in sl_case6.json
+# the literal secret must NOT be in the log
+NOT FOUND /PlaintextSecret/ in sl_case6.json
+drop user sl_user@localhost;
+#
+# 7. Clean up
+#
+set global selective_trace_enabled= OFF;
+drop database sl_hot;
+drop database sl_cold;
+uninstall plugin selective_trace;
+Warnings:
+Warning	1620	Plugin is busy and will be uninstalled on shutdown

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ---------------------------------------------------------------------------
-# security-test.sh — validação de segurança adversarial do selective_log,
+# security-test.sh — validação de segurança adversarial do selective_trace,
 # focada em OL9 (SELinux, permissões) mas útil em qualquer plataforma.
 #
 # Roda DENTRO de um oraclelinux:9 com o .so em /plugin_out:
@@ -14,19 +14,19 @@ echo ">> Instalando MariaDB ${MARIADB_SERIES} (RPM oficial) + plugin"
 curl -LsS https://r.mariadb.com/downloads/mariadb_repo_setup \
     | bash -s -- --mariadb-server-version=mariadb-${MARIADB_SERIES} >/dev/null 2>&1
 dnf -y install MariaDB-server MariaDB-client python3 >/dev/null 2>&1
-cp /plugin_out/selective_log.so /usr/lib64/mysql/plugin/
+cp /plugin_out/selective_trace.so /usr/lib64/mysql/plugin/
 mariadb-install-db --user=mysql >/dev/null 2>&1
 
 echo ">> SELinux status do ambiente:"
 getenforce 2>/dev/null || echo "(getenforce indisponível — SELinux não ativo neste kernel/container)"
-ls -Z /usr/lib64/mysql/plugin/selective_log.so 2>/dev/null || \
-  ls -l /usr/lib64/mysql/plugin/selective_log.so
+ls -Z /usr/lib64/mysql/plugin/selective_trace.so 2>/dev/null || \
+  ls -l /usr/lib64/mysql/plugin/selective_trace.so
 
 /usr/sbin/mariadbd --user=mysql --skip-networking --socket=/tmp/m.sock \
-    --plugin-load-add=selective_log.so --plugin-maturity=experimental \
-    --selective_log_enabled=ON \
-    --selective_log_schemas_to_log=app \
-    --selective_log_log_file_path=/var/lib/mysql/sec.json \
+    --plugin-load-add=selective_trace.so --plugin-maturity=experimental \
+    --selective_trace_enabled=ON \
+    --selective_trace_schemas_to_log=app \
+    --selective_trace_file_path=/var/lib/mysql/sec.json \
     >/tmp/mariadbd.log 2>&1 &
 for i in $(seq 1 60); do mariadb -uroot -S /tmp/m.sock -e "SELECT 1" >/dev/null 2>&1 && break; sleep 1; done
 M="mariadb -uroot -S /tmp/m.sock"
@@ -41,7 +41,7 @@ $M -e "CREATE DATABASE app; CREATE TABLE app.t (id INT PRIMARY KEY AUTO_INCREMEN
 echo ""
 echo "### T1 — Injeção de SQL no modo TABLE (sql_mode default)"
 # =====================================================================
-$M -e "SET GLOBAL selective_log_output='TABLE'"
+$M -e "SET GLOBAL selective_trace_output='TABLE'"
 $M app -e "TRUNCATE t" 2>/dev/null
 # payloads que tentam quebrar o INSERT interno do plugin:
 $M app <<'SQL'
@@ -57,10 +57,10 @@ else
     bad "tabela de privilégios sumiu — injeção de SQL!"
 fi
 # nenhuma linha órfã/extra na tabela de log além dos eventos legítimos:
-n=$($M -N -e "SELECT COUNT(*) FROM mysql.selective_log_events")
+n=$($M -N -e "SELECT COUNT(*) FROM mysql.selective_trace_events")
 echo "  (eventos na tabela de log: $n)"
 # a query maliciosa foi gravada como DADO (uma linha), não executada:
-if $M -N -e "SELECT COUNT(*) FROM mysql.selective_log_events WHERE query LIKE '%DROP TABLE mysql.user%'" | grep -q 1; then
+if $M -N -e "SELECT COUNT(*) FROM mysql.selective_trace_events WHERE query LIKE '%DROP TABLE mysql.user%'" | grep -q 1; then
     ok "payload gravado como texto literal, não executado"
 else
     bad "payload não encontrado literalmente (escaping alterou o dado?)"
@@ -77,7 +77,7 @@ $M app -e "INSERT INTO t (v) VALUES ('x'); INSERT INTO t (v) VALUES ('nasty'')( 
 $M app --binary-mode -e "INSERT INTO t (v) VALUES ('q\\\\z')" 2>/dev/null
 sleep 2
 after=$($M -N -e "SELECT COUNT(*) FROM information_schema.tables")
-wf=$($M -N -e "SHOW GLOBAL STATUS LIKE 'Selective_log_write_failures'" | awk '{print $2}')
+wf=$($M -N -e "SHOW GLOBAL STATUS LIKE 'Selective_trace_write_failures'" | awk '{print $2}')
 alive=$($M -N -e "SELECT 1" 2>/dev/null)
 echo "  write_failures=$wf  (tabelas antes=$before depois=$after servidor_vivo=$alive)"
 if [ "$alive" = "1" ] && [ "$before" = "$after" ]; then
@@ -94,7 +94,7 @@ $M -e "SET GLOBAL sql_mode=DEFAULT"
 echo ""
 echo "### T3 — Injeção de JSON/log no modo FILE"
 # =====================================================================
-$M -e "SET GLOBAL selective_log_output='FILE'"
+$M -e "SET GLOBAL selective_trace_output='FILE'"
 : > /var/lib/mysql/sec.json 2>/dev/null || true
 $M app <<'SQL'
 INSERT INTO t (v) VALUES ('quebra"aspas\e {"fake":"json"} e\nnewline literal');
@@ -127,7 +127,7 @@ echo ""
 echo "### T4 — Vazamento de segredos em cleartext"
 # =====================================================================
 : > /var/lib/mysql/sec.json 2>/dev/null || true
-$M -e "SET GLOBAL selective_log_schemas_to_log='app,mysql'"
+$M -e "SET GLOBAL selective_trace_schemas_to_log='app,mysql'"
 $M app -e "CREATE USER IF NOT EXISTS leaky@localhost IDENTIFIED BY 'SuperSecret123'" 2>/dev/null
 $M app -e "SET PASSWORD FOR leaky@localhost = PASSWORD('AnotherSecret456')" 2>/dev/null
 $M app -e "INSERT INTO t (v) VALUES ('api_key=sk-INLINE-SECRET-789')" 2>/dev/null
@@ -164,12 +164,12 @@ echo ""
 echo "### T6 — Path traversal / escrita fora do datadir"
 # =====================================================================
 # usuário com privilégio já poderia; validamos que a falha é graciosa
-$M -e "SET GLOBAL selective_log_log_file_path='/root/naopode.json'" 2>/dev/null
+$M -e "SET GLOBAL selective_trace_file_path='/root/naopode.json'" 2>/dev/null
 $M app -e "INSERT INTO t (v) VALUES ('probe')" 2>/dev/null
 sleep 1
 alive=$($M -N -e "SELECT 1" 2>/dev/null)
 [ "$alive" = "1" ] && ok "path inacessível não derruba o servidor (falha graciosa)" || bad "servidor caiu ao usar path inválido"
-$M -e "SET GLOBAL selective_log_log_file_path='/var/lib/mysql/sec.json'" 2>/dev/null
+$M -e "SET GLOBAL selective_trace_file_path='/var/lib/mysql/sec.json'" 2>/dev/null
 
 mariadb-admin -uroot -S /tmp/m.sock shutdown 2>/dev/null
 echo ""

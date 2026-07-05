@@ -1,4 +1,4 @@
-/* Copyright (C) 2026 selective_log plugin authors
+/* Copyright (C) 2026 selective_trace plugin authors
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -29,17 +29,17 @@
   legacy unbuffered behavior. Wrap it so the call site stays version-clean.
 */
 #if MYSQL_VERSION_ID >= 120000
-#  define SELECTIVE_LOGGER_OPEN(path, size, rot) \
+#  define SELECTIVE_TRACEGER_OPEN(path, size, rot) \
      logger_open((path), (size), (rot), 0)
 #else
-#  define SELECTIVE_LOGGER_OPEN(path, size, rot) \
+#  define SELECTIVE_TRACEGER_OPEN(path, size, rot) \
      logger_open((path), (size), (rot))
 #endif
 
-namespace selective_log {
+namespace selective_trace {
 
 /*
-  No size-based rotation: selective_log delegates retention to external
+  No size-based rotation: selective_trace delegates retention to external
   tooling (logrotate & friends), so the limit is effectively infinite.
 */
 static const unsigned long long NO_ROTATION_SIZE= 0x7FFFFFFFFFFFFFFFULL;
@@ -53,7 +53,7 @@ static int open_failed_logged= 0;   /* avoid flooding the error log */
 static PSI_rwlock_key key_rwlock_logfile;
 static PSI_rwlock_info log_rwlock_list[]=
 {
-  { &key_rwlock_logfile, "SELECTIVE_LOG::log_file_lock", PSI_FLAG_GLOBAL }
+  { &key_rwlock_logfile, "SELECTIVE_TRACE::log_file_lock", PSI_FLAG_GLOBAL }
 };
 #else
 #define key_rwlock_logfile 0
@@ -64,7 +64,7 @@ void file_writer_init()
   logger_init_mutexes();
 #ifdef HAVE_PSI_INTERFACE
   if (PSI_server)
-    PSI_server->register_rwlock("selective_log", log_rwlock_list, 1);
+    PSI_server->register_rwlock("selective_trace", log_rwlock_list, 1);
 #endif
   mysql_rwlock_init(key_rwlock_logfile, &log_lock);
 }
@@ -79,13 +79,13 @@ static bool open_locked(const char *path)
 {
   if (path == NULL || path[0] == '\0')
     return false;
-  log_handle= SELECTIVE_LOGGER_OPEN(path, NO_ROTATION_SIZE, 0);
+  log_handle= SELECTIVE_TRACEGER_OPEN(path, NO_ROTATION_SIZE, 0);
   if (log_handle == NULL)
   {
     if (!open_failed_logged)
     {
       open_failed_logged= 1;
-      fprintf(stderr, "selective_log: could not open log file '%s'\n", path);
+      fprintf(stderr, "selective_trace: could not open log file '%s'\n", path);
     }
     write_failures++;
     return false;
@@ -178,4 +178,4 @@ void json_escape_append(std::string *out, const char *src, size_t len)
   }
 }
 
-} /* namespace selective_log */
+} /* namespace selective_trace */

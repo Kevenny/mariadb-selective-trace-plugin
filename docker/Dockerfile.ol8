@@ -1,6 +1,6 @@
 # Dockerfile.ol8 - Ambiente de build do plugin para Oracle Linux 8+
 #
-# Produz um selective_log.so linkado contra a glibc 2.28 do EL8, carregável
+# Produz um selective_trace.so linkado contra a glibc 2.28 do EL8, carregável
 # em MariaDB 11.4.x rodando em Oracle Linux / RHEL / Rocky / Alma 8 e 9
 # (glibc é retrocompatível: binário EL8 roda em EL9, não o contrário).
 FROM oraclelinux:8
