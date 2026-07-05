@@ -2,89 +2,92 @@
 
 [![CI](https://github.com/Kevenny/mariadb-selective-log-plugin/actions/workflows/ci.yml/badge.svg)](https://github.com/Kevenny/mariadb-selective-log-plugin/actions/workflows/ci.yml)
 
-Plugin nativo (open source, GPLv2) para **MariaDB 11.4 e 12.3+** que faz
-**trace seletivo de queries** — rastreia apenas queries de schemas/tabelas
-específicos (e por tipo de comando), ao contrário do `general_log`, que só
-tem o modo tudo-ou-nada. Baixo overhead, ativação a quente por `SET GLOBAL`.
+Native (open source, GPLv2) plugin for **MariaDB 11.4 and 12.3+** that does
+**selective query tracing** — it traces only queries touching specific
+schemas/tables (and by command type), unlike `general_log`, which is
+all-or-nothing. Low overhead, hot-configurable via `SET GLOBAL`.
 
-Internamente usa a Audit Plugin API do MariaDB (o único hook que expõe
-schema+tabela resolvidos), mas o propósito é **diagnóstico/observabilidade**,
-não compliance.
+Internally it uses the MariaDB Audit Plugin API (the only hook that exposes
+resolved schema+table), but the purpose is **diagnostics/observability**,
+not compliance.
 
-**Status: implementado e validado** — filtros dinâmicos, saída FILE (JSON por
-linha) e TABLE (`mysql.selective_trace_events`), duração em ms, benchmark e
-Valgrind. Overhead medido: **~0%** (vs **+10%** do `general_log` no mesmo
-cenário sintético) — ver [docs/BENCHMARKS.md](./docs/BENCHMARKS.md).
+**Status: implemented and validated** — dynamic filters, FILE output (one
+JSON object per line) and TABLE output (`mysql.selective_trace_events`),
+millisecond duration, benchmark and Valgrind. Measured overhead: **~0%**
+(vs **+10%** for `general_log` in the same synthetic scenario) — see
+[docs/BENCHMARKS.md](./docs/BENCHMARKS.md).
 
-> 📖 **Como usar o plugin** (variáveis, formato do JSON, schema da tabela,
-> limitações): [`docs/USAGE.md`](./docs/USAGE.md)
+> 📖 **How to use the plugin** (variables, JSON format, log table schema,
+> limitations): [`docs/USAGE.md`](./docs/USAGE.md)
 >
-> 🔬 Pesquisa da API de audit no fonte do 11.4.4:
+> 🔬 Research on the audit API from the 11.4.4 source (Portuguese):
 > [`docs/RESEARCH_NOTES.md`](./docs/RESEARCH_NOTES.md)
 >
-> ⚖️ Decisões técnicas (C++ vs C, eventos usados, anti-loop do modo TABLE,
-> lições de crashes reais): [`docs/DECISIONS.md`](./docs/DECISIONS.md)
+> ⚖️ Technical decisions — C++ vs C, events used, TABLE-mode anti-loop,
+> lessons from real crashes (Portuguese): [`docs/DECISIONS.md`](./docs/DECISIONS.md)
 >
-> 🔒 Modelo de ameaças, bateria adversarial e hardening SELinux/OL9:
+> 🔒 Threat model, adversarial test battery and SELinux/OL9 hardening:
 > [`docs/SECURITY.md`](./docs/SECURITY.md)
 >
-> 📋 Especificação original usada com o Claude Code: [`CLAUDE.md`](./CLAUDE.md)
+> 📋 Original specification used with Claude Code (Portuguese, historical):
+> [`CLAUDE.md`](./CLAUDE.md)
 
-## TL;DR de uso
+## Usage TL;DR
 
 ```sql
 INSTALL PLUGIN selective_trace SONAME 'selective_trace.so';
 SET GLOBAL selective_trace_enabled = ON;
-SET GLOBAL selective_trace_schemas_to_log = 'vendas';            -- por schema
-SET GLOBAL selective_trace_tables_to_log  = 'rh.salarios,logs.*'; -- por tabela
--- => JSON por linha em selective_trace.json (datadir), ou:
+SET GLOBAL selective_trace_schemas_to_log = 'sales';             -- by schema
+SET GLOBAL selective_trace_tables_to_log  = 'hr.salaries,logs.*'; -- by table
+-- => one JSON line per event in selective_trace.json (datadir), or:
 SET GLOBAL selective_trace_output = 'TABLE';   -- mysql.selective_trace_events
 ```
 
-Com **ambas** as listas vazias o plugin não loga nada (fail-safe).
+With **both** lists empty, the plugin traces nothing (fail-safe).
 
-## Estrutura do Projeto
+## Project layout
 
 ```
 .
 ├── src/
-│   ├── selective_trace.cc         # entrypoint: descriptor de audit, sysvars, captura
-│   ├── filter_engine.{h,cc}     # lógica pura de filtro (sem headers do MariaDB)
-│   ├── log_writer_file.{h,cc}   # modo FILE: JSON por linha via logger service
-│   ├── log_writer_table.{h,cc}  # modo TABLE: thread própria + SQL service
+│   ├── selective_trace.cc       # entrypoint: audit descriptor, sysvars, capture
+│   ├── filter_engine.{h,cc}     # pure filter logic (no MariaDB headers)
+│   ├── log_writer_file.{h,cc}   # FILE mode: one JSON line via the logger service
+│   ├── log_writer_table.{h,cc}  # TABLE mode: dedicated thread + SQL service
 │   └── CMakeLists.txt           # MYSQL_ADD_PLUGIN(selective_trace ... MODULE_ONLY)
 ├── tests/
-│   └── test_filter_logic.cc     # testes standalone do filter_engine (g++ puro)
+│   └── test_filter_logic.cc     # standalone filter_engine tests (plain g++)
 ├── scripts/
-│   ├── setup-dev-env.sh         # sobe o ambiente completo (imagem + fonte 11.4.4)
+│   ├── setup-dev-env.sh         # bring up the full environment (image + 11.4.4 source)
 │   ├── build.sh                 # full | --plugin (incremental) | --package
-│   ├── benchmark.sh             # Etapa 5: overhead vs general_log (mariadb-slap)
-│   └── valgrind-test.sh         # Etapa 5: mariadbd sob Valgrind + bateria
-├── docker/                      # container dev (toolchain) + mariadb-test (oficial)
-└── docs/                        # USAGE, RESEARCH_NOTES, DECISIONS, BENCHMARKS
+│   ├── benchmark.sh             # overhead vs general_log (mariadb-slap)
+│   └── valgrind-test.sh         # mariadbd under Valgrind + battery
+├── docker/                      # dev container (toolchain) + mariadb-test (official)
+└── docs/                        # USAGE, RESEARCH_NOTES, DECISIONS, BENCHMARKS, SECURITY
 ```
 
-## Desenvolvimento
+## Development
 
-### 1. Subir o ambiente
+### 1. Bring up the environment
 
 ```bash
 ./scripts/setup-dev-env.sh
 ```
 
-Builda a imagem de desenvolvimento, sobe o container `dev` e clona o fonte
-oficial do MariaDB (tag `mariadb-11.4.4`) em `/opt/mariadb-src` (volume).
+Builds the development image, starts the `dev` container and clones the
+official MariaDB source (tag `mariadb-11.4.4`) into `/opt/mariadb-src`
+(volume).
 
-### 2. Compilar
+### 2. Build
 
 ```bash
-# dentro do container dev (docker compose -f docker/docker-compose.yml exec dev bash)
-./scripts/build.sh full        # primeira vez (build completo, 20-60 min)
-./scripts/build.sh --plugin    # incremental: só o plugin (segundos, com ccache)
-./scripts/build.sh --package   # copia o .so para build/plugin_output/
+# inside the dev container (docker compose -f docker/docker-compose.yml exec dev bash)
+./scripts/build.sh full        # first time (full build, 20-60 min)
+./scripts/build.sh --plugin    # incremental: plugin only (seconds, with ccache)
+./scripts/build.sh --package   # copy the .so to build/plugin_output/
 ```
 
-### 3. Testes unitários do filtro (sem MariaDB)
+### 3. Filter unit tests (no MariaDB)
 
 ```bash
 g++ -std=c++11 -Wall -Wextra -Werror -I src \
@@ -92,7 +95,7 @@ g++ -std=c++11 -Wall -Wextra -Werror -I src \
   && ./test_filter_logic
 ```
 
-### 4. Testar num MariaDB 11.4.4 oficial "limpo"
+### 4. Test on a clean, official MariaDB 11.4.4
 
 ```bash
 docker compose -f docker/docker-compose.yml --profile test up -d mariadb-test
@@ -100,61 +103,61 @@ docker compose -f docker/docker-compose.yml exec mariadb-test \
   mariadb -uroot -pdevpassword testdb
 ```
 
-O `docker/test-my.cnf` já carrega o plugin
-(`plugin-load-add=selective_trace.so` + `plugin-maturity=experimental`) com o
-filtro inicial `selective_trace_schemas_to_log=testdb`.
+`docker/test-my.cnf` already loads the plugin
+(`plugin-load-add=selective_trace.so` + `plugin-maturity=experimental`) with
+the initial filter `selective_trace_schemas_to_log=testdb`.
 
-### 5. Benchmark e Valgrind
+### 5. Benchmark and Valgrind
 
 ```bash
 docker exec -i mariadb-plugin-test bash < scripts/benchmark.sh
 docker exec -i mariadb-plugin-dev  bash < scripts/valgrind-test.sh
 ```
 
-### 6. Build para Oracle Linux / RHEL 8+
+### 6. Build for Oracle Linux / RHEL 8+
 
-O `.so` do container `dev` (Ubuntu 22.04) exige glibc ≥ 2.35 e não carrega em
-EL8/EL9. Use o ambiente `dev-ol8` (base `oraclelinux:8` + gcc-toolset-12),
-que gera um binário exigindo apenas GLIBC_2.17 — carregável em EL8, EL9 e
-mais novos:
+The `dev` container's `.so` (Ubuntu 22.04) needs glibc ≥ 2.35 and will not
+load on EL8/EL9. Use the `dev-ol8` environment (base `oraclelinux:8` +
+gcc-toolset-12), which produces a binary requiring only GLIBC_2.17 — loadable
+on EL8, EL9 and newer:
 
 ```bash
 docker compose -f docker/docker-compose.yml --profile ol8 up -d --build dev-ol8
 docker exec mariadb-plugin-dev-ol8 bash -lc 'cd /workspace && ./scripts/build.sh full && ./scripts/build.sh --package'
-# saída: build/plugin_output-ol8/selective_trace.so
-# validação num OL8 limpo com MariaDB 11.4 instalado via RPM oficial:
+# output: build/plugin_output-ol8/selective_trace.so
+# validate on a clean OL8 with MariaDB 11.4 installed via the official RPM:
 docker run --rm -i -v "$PWD/build/plugin_output-ol8:/plugin_out:ro" \
     oraclelinux:8 bash < scripts/validate-ol8.sh
 ```
 
-Validado contra MariaDB 11.4.12 (RPMs oficiais) em Oracle Linux 8 **e 9**
-(mesmo .so; para OL9 basta trocar a imagem para oraclelinux:9) — o plugin
-compilado contra o fonte 11.4.4 é compatível com toda a série 11.4.x.
+Validated against MariaDB 11.4.12 (official RPMs) on Oracle Linux 8 **and 9**
+(same .so; for OL9 just swap the image to oraclelinux:9) — the plugin built
+against the 11.4.4 source is compatible with the whole 11.4.x series.
 
-### 7. Build para MariaDB 12.3+ (Oracle Linux 9)
+### 7. Build for MariaDB 12.3+ (Oracle Linux 9)
 
-A audit ABI mudou de `0x0302` (11.4) para `0x0303` (12.3), então o `.so` de
-11.4 **não** carrega num servidor 12.3. O mesmo código-fonte compila para as
-duas séries (wrapper por `MYSQL_VERSION_ID` para a mudança do logger
-service); só é preciso um build dedicado contra o fonte 12.3:
+The audit ABI changed from `0x0302` (11.4) to `0x0303` (12.3), so the 11.4
+`.so` will **not** load on a 12.3 server. The same source compiles for both
+series (a `MYSQL_VERSION_ID` wrapper handles the logger service change); only
+a dedicated build against the 12.3 source is needed:
 
 ```bash
 docker compose -f docker/docker-compose.yml --profile v123 up -d --build dev-123-ol8
 docker exec mariadb-plugin-dev-123-ol8 bash -lc \
   './scripts/download-mariadb-source.sh && ./scripts/build.sh full && ./scripts/build.sh --package'
-# saída: build/plugin_output-123-ol9/selective_trace.so
+# output: build/plugin_output-123-ol9/selective_trace.so
 docker run --rm -i -v "$PWD/build/plugin_output-123-ol9:/plugin_out:ro" \
     oraclelinux:9 bash < scripts/validate-123-ol9.sh
 ```
 
-Validado contra MariaDB 12.3.2 (RPM oficial) em Oracle Linux 9: plugin
-ACTIVE, smoke test completo e bateria de segurança 7/7.
+Validated against MariaDB 12.3.2 (official RPM) on Oracle Linux 9: plugin
+ACTIVE, full smoke test and 7/7 security battery.
 
-**Windows**: não suportado nesta versão — `log_writer_table` usa pthread,
-relógios POSIX e `__attribute__((constructor))`. O porte é viável
-(std::thread/std::chrono + DllMain, como o server_audit faz), mas exige
-toolchain MSVC para compilar a árvore do MariaDB no Windows.
+**Windows**: not supported in this version — `log_writer_table` uses pthreads,
+POSIX clocks and `__attribute__((constructor))`. A port is feasible
+(std::thread/std::chrono + DllMain, as server_audit does), but requires an
+MSVC toolchain to build the MariaDB tree on Windows.
 
-## Licença
+## License
 
-GPLv2, compatível com a licença do MariaDB Server.
+GPLv2, compatible with the MariaDB Server license.

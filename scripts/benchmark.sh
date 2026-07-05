@@ -6,11 +6,11 @@
 #   docker exec mariadb-plugin-test bash /scripts/benchmark.sh
 # ou copie e execute. Usa mariadb-slap com uma carga mista INSERT+SELECT.
 #
-# Cenários:
+# Scenarios:
 #   1 baseline      — selective_trace OFF, general_log OFF
 #   2 general_log   — general_log=ON (arquivo)
 #   3 sel_miss      — selective_trace ON filtrando bench_hot, carga em bench_cold
-#                     (caminho "não loga": só o custo do filtro)
+#                     ("no-log" path: only the filter cost)
 #   4 sel_hit_file  — selective_trace ON, carga em bench_hot, output=FILE
 #   5 sel_hit_table — selective_trace ON, carga em bench_hot, output=TABLE
 # ---------------------------------------------------------------------------
@@ -21,7 +21,7 @@ SLAP="mariadb-slap -uroot -p${MARIADB_ROOT_PASSWORD:-devpassword}"
 
 CONCURRENCY="${BENCH_CONCURRENCY:-8}"
 QUERIES="${BENCH_QUERIES:-20000}"
-# mix 50/50 com SELECT por índice: custo por query constante, não cresce
+# 50/50 mix with an indexed SELECT: constant per-query cost, does not grow
 # com o tamanho da tabela (evita confundir overhead do log com scan maior)
 QUERY_MIX="INSERT INTO t (v) VALUES ('benchmark-row-payload-0123456789');SELECT v FROM t WHERE id = 50"
 
@@ -46,7 +46,7 @@ set_config() {
     "
 }
 
-# run_slap <schema>  → imprime segundos (média para rodar todas as queries)
+# run_slap <schema>  -> prints seconds (average to run all queries)
 run_slap() {
     $SLAP --create-schema="$1" --no-drop \
           --delimiter=';' --query="$QUERY_MIX" \
@@ -56,11 +56,11 @@ run_slap() {
 
 scenario() {
     local name="$1" schema="$2"
-    # tabelas sempre no mesmo estado inicial em todos os cenários
+    # tables always in the same initial state across scenarios
     $MYSQL -Dbench_hot -e "TRUNCATE TABLE bench_hot.t; TRUNCATE TABLE bench_cold.t;
                INSERT INTO bench_hot.t (v)  SELECT 'seed' FROM seq_1_to_1000;
                INSERT INTO bench_cold.t (v) SELECT 'seed' FROM seq_1_to_1000;"
-    # aquecimento + medição
+    # warm-up + measurement
     run_slap "$schema" >/dev/null
     local secs
     secs=$(run_slap "$schema")
@@ -68,8 +68,8 @@ scenario() {
 }
 
 # --------------------------------------------------------------------------
-# Suíte "light": DO 1 (sem tabela, custo de execução mínimo) — isola o custo
-# do caminho de log, que fica proporcionalmente visível.
+# "light" suite: DO 1 (no table, minimal execution cost) — isolates the log
+# path cost, which becomes proportionally visible.
 # --------------------------------------------------------------------------
 LIGHT_CONCURRENCY="${BENCH_LIGHT_CONCURRENCY:-32}"
 LIGHT_QUERIES="${BENCH_LIGHT_QUERIES:-60000}"
@@ -119,11 +119,11 @@ set_config OFF ON '' FILE
 scenario_light general_log_l bench_cold
 $MYSQL -e "SET GLOBAL general_log=OFF"
 
-# sessão em bench_cold, filtro bench_hot => caminho "não loga"
+# session on bench_cold, filter bench_hot => "no-log" path
 set_config ON OFF 'bench_hot' FILE
 scenario_light sel_miss_l bench_cold
 
-# sessão em bench_hot (schema da sessão casa) => loga todo DO 1
+# session on bench_hot (session schema matches) => logs every DO 1
 set_config ON OFF 'bench_hot' FILE
 scenario_light sel_hit_file_l bench_hot
 

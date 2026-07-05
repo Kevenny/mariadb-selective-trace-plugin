@@ -2,13 +2,13 @@
 # ---------------------------------------------------------------------------
 # build.sh
 #
-# Compila o servidor MariaDB (build mínima necessária para plugins) e,
-# em seguida, compila apenas o(s) plugin(s) do diretório src/.
+# Builds the MariaDB server (minimal build needed for plugins) and then
+# compiles only the plugin(s) under src/.
 #
-# Uso:
-#   ./scripts/build.sh              # build completo (primeira vez, mais lento)
-#   ./scripts/build.sh --plugin     # recompila só o plugin (build incremental)
-#   ./scripts/build.sh --package    # gera pacote de teste (mysqld + plugin)
+# Usage:
+#   ./scripts/build.sh              # full build (first time, slower)
+#   ./scripts/build.sh --plugin     # recompile the plugin only (incremental)
+#   ./scripts/build.sh --package    # produce a test package (mysqld + plugin)
 # ---------------------------------------------------------------------------
 set -euo pipefail
 
@@ -20,19 +20,19 @@ WORKSPACE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MODE="${1:-full}"
 
 link_plugin_source() {
-    echo ">> Linkando código do plugin (src/) dentro da árvore de plugins do MariaDB"
+    echo ">> Linking plugin source (src/) into the MariaDB plugin tree"
     local target="${MARIADB_SRC_DIR}/plugin/${PLUGIN_LINK_NAME}"
     if [ ! -L "${target}" ]; then
         rm -rf "${target}"
         ln -s "${WORKSPACE_DIR}/src" "${target}"
-        echo "   Link criado: ${target} -> ${WORKSPACE_DIR}/src"
+        echo "   Link created: ${target} -> ${WORKSPACE_DIR}/src"
     else
-        echo "   Link já existe: ${target}"
+        echo "   Link already exists: ${target}"
     fi
 }
 
 configure_cmake() {
-    echo ">> Configurando build com CMake (Ninja + ccache)"
+    echo ">> Configuring build with CMake (Ninja + ccache)"
     mkdir -p "${BUILD_DIR}"
     cd "${BUILD_DIR}"
     cmake "${MARIADB_SRC_DIR}" \
@@ -53,27 +53,27 @@ configure_cmake() {
 build_full() {
     link_plugin_source
     configure_cmake
-    echo ">> Compilando MariaDB completo (isso pode levar de 20 a 60+ minutos)"
+    echo ">> Building the full MariaDB (this can take 20 to 60+ minutes)"
     cd "${BUILD_DIR}"
     ninja -j"$(nproc)"
-    echo ">> Build completo finalizado."
+    echo ">> Full build finished."
 }
 
 build_plugin_only() {
     link_plugin_source
     if [ ! -f "${BUILD_DIR}/build.ninja" ]; then
-        echo "!! Build ainda não configurado. Rode primeiro: ./scripts/build.sh full"
+        echo "!! Build not configured yet. Run first: ./scripts/build.sh full"
         exit 1
     fi
-    echo ">> Recompilando apenas o plugin ${PLUGIN_LINK_NAME}"
+    echo ">> Recompiling only the plugin ${PLUGIN_LINK_NAME}"
     cd "${BUILD_DIR}"
-    cmake . >/dev/null   # re-scan em caso de novos arquivos .cc
+    cmake . >/dev/null   # re-scan in case of new .cc files
     ninja "${PLUGIN_LINK_NAME}"
-    echo ">> Plugin recompilado."
+    echo ">> Plugin recompiled."
 }
 
 package_for_test() {
-    echo ">> Empacotando plugin compilado para o container de teste"
+    echo ">> Packaging the compiled plugin for the test container"
     local out_dir="${PLUGIN_OUTPUT_DIR:-${WORKSPACE_DIR}/build/plugin_output}"
     mkdir -p "${out_dir}"
 
@@ -81,13 +81,13 @@ package_for_test() {
     so_path=$(find "${BUILD_DIR}" -name "ha_${PLUGIN_LINK_NAME}.so" -o -name "${PLUGIN_LINK_NAME}.so" | head -n1)
 
     if [ -z "${so_path}" ]; then
-        echo "!! Arquivo .so do plugin não encontrado. Rode o build antes."
+        echo "!! Plugin .so not found. Run the build first."
         exit 1
     fi
 
     cp "${so_path}" "${out_dir}/${PLUGIN_LINK_NAME}.so"
-    echo ">> Plugin copiado para: ${out_dir}/${PLUGIN_LINK_NAME}.so"
-    echo ">> Suba o container de teste com:"
+    echo ">> Plugin copied to: ${out_dir}/${PLUGIN_LINK_NAME}.so"
+    echo ">> Start the test container with:"
     echo "     docker compose --profile test up -d mariadb-test"
 }
 
@@ -102,7 +102,7 @@ case "${MODE}" in
         package_for_test
         ;;
     *)
-        echo "Uso: $0 [full|--plugin|--package]"
+        echo "Usage: $0 [full|--plugin|--package]"
         exit 1
         ;;
 esac

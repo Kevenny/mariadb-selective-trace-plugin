@@ -1,26 +1,26 @@
 #!/usr/bin/env bash
 # ---------------------------------------------------------------------------
-# validate-ol8.sh — valida o selective_trace.so buildado para EL8 num
-# Oracle Linux 8 limpo com MariaDB 11.4 instalado via RPM oficial.
+# validate-ol8.sh — validates the selective_trace.so built for EL8 on a
+# clean Oracle Linux 8 with MariaDB 11.4 installed via the official RPM.
 #
-# Roda DENTRO de um container oraclelinux:8 (como root) com o .so montado
-# em /plugin_out:
+# Runs INSIDE an oraclelinux:8 container (as root) with the .so mounted
+# at /plugin_out:
 #   docker run --rm -i -v "<repo>/build/plugin_output-ol8:/plugin_out:ro" \
 #       oraclelinux:8 bash < scripts/validate-ol8.sh
 # ---------------------------------------------------------------------------
 set -euo pipefail
 
-echo ">> [1/4] Configurando repo MariaDB 11.4 e instalando RPMs"
+echo ">> [1/4] Setting up the MariaDB 11.4 repo and installing RPMs"
 curl -LsS https://r.mariadb.com/downloads/mariadb_repo_setup \
     | bash -s -- --mariadb-server-version=mariadb-11.4 >/dev/null
 dnf -y install MariaDB-server MariaDB-client >/dev/null
 mariadbd --version
 
-echo ">> [2/4] Instalando o plugin e inicializando o datadir"
+echo ">> [2/4] Installing the plugin and initializing the datadir"
 cp /plugin_out/selective_trace.so /usr/lib64/mysql/plugin/
 mariadb-install-db --user=mysql >/dev/null
 
-echo ">> [3/4] Subindo mariadbd com o plugin"
+echo ">> [3/4] Starting mariadbd with the plugin"
 /usr/sbin/mariadbd --user=mysql --skip-networking \
     --socket=/tmp/m.sock \
     --plugin-load-add=selective_trace.so \
@@ -40,7 +40,7 @@ $M -e "SELECT VERSION() AS versao"
 $M -e "SELECT PLUGIN_NAME, PLUGIN_STATUS, PLUGIN_AUTH_VERSION
        FROM information_schema.PLUGINS WHERE PLUGIN_NAME='selective_trace'"
 
-echo ">> [4/4] Smoke test funcional"
+echo ">> [4/4] Functional smoke test"
 $M --force <<'SQL'
 CREATE DATABASE hotdb;
 CREATE DATABASE colddb;
@@ -66,4 +66,4 @@ $M -e "UNINSTALL PLUGIN selective_trace;
        INSTALL PLUGIN selective_trace SONAME 'selective_trace.so';
        SELECT 'servidor vivo' AS status"
 mariadb-admin -uroot -S /tmp/m.sock shutdown
-echo ">> VALIDACAO OL8 CONCLUIDA"
+echo ">> OL8 VALIDATION COMPLETE"

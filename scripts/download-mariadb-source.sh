@@ -2,13 +2,13 @@
 # ---------------------------------------------------------------------------
 # download-mariadb-source.sh
 #
-# Baixa o código-fonte oficial do MariaDB 11.4.4 (branch de release, via git,
-# com submódulos) para dentro do container de desenvolvimento.
+# Downloads the official MariaDB source (release branch, via git, with
+# submodules) into the development container.
 #
-# Uso:
+# Usage:
 #   ./scripts/download-mariadb-source.sh
 #
-# Variáveis de ambiente:
+# Environment variables:
 #   MARIADB_VERSION   (default: 11.4.4)
 #   MARIADB_SRC_DIR   (default: /opt/mariadb-src)
 # ---------------------------------------------------------------------------
@@ -19,31 +19,31 @@ MARIADB_SRC_DIR="${MARIADB_SRC_DIR:-/opt/mariadb-src}"
 REPO_URL="https://github.com/MariaDB/server.git"
 TAG="mariadb-${MARIADB_VERSION}"
 
-echo ">> Preparando diretório de fonte em: ${MARIADB_SRC_DIR}"
+echo ">> Preparing source directory at: ${MARIADB_SRC_DIR}"
 mkdir -p "${MARIADB_SRC_DIR}"
 
 if [ -d "${MARIADB_SRC_DIR}/.git" ]; then
-    echo ">> Repositório já existe. Atualizando referências..."
+    echo ">> Repository already exists. Updating refs..."
     cd "${MARIADB_SRC_DIR}"
     git fetch --tags origin
 else
-    echo ">> Clonando MariaDB server (shallow, apenas a tag ${TAG})..."
+    echo ">> Cloning MariaDB server (shallow, tag ${TAG} only)..."
     git clone --branch "${TAG}" --depth 1 "${REPO_URL}" "${MARIADB_SRC_DIR}"
     cd "${MARIADB_SRC_DIR}"
 fi
 
-echo ">> Fazendo checkout da tag ${TAG}"
+echo ">> Checking out tag ${TAG}"
 git checkout "tags/${TAG}"
 
-echo ">> Inicializando submódulos (wsrep, storage engines externos, etc.)"
+echo ">> Initializing submodules (wsrep, external storage engines, etc.)"
 git submodule update --init --recursive --depth 1
 
 echo ""
-echo ">> Fonte do MariaDB ${MARIADB_VERSION} pronto em: ${MARIADB_SRC_DIR}"
-echo ">> Diretórios relevantes para o plugin:"
-echo "     - ${MARIADB_SRC_DIR}/plugin/               (plugins existentes, referência)"
-echo "     - ${MARIADB_SRC_DIR}/include/mysql/         (headers da plugin API)"
-echo "     - ${MARIADB_SRC_DIR}/sql/                   (núcleo do servidor: sql_parse.cc, log.cc, etc.)"
+echo ">> MariaDB ${MARIADB_VERSION} source ready at: ${MARIADB_SRC_DIR}"
+echo ">> Directories relevant to the plugin:"
+echo "     - ${MARIADB_SRC_DIR}/plugin/               (existing plugins, reference)"
+echo "     - ${MARIADB_SRC_DIR}/include/mysql/         (plugin API headers)"
+echo "     - ${MARIADB_SRC_DIR}/sql/                   (server core: sql_parse.cc, log.cc, etc.)"
 echo ""
-echo ">> Próximo passo: ./scripts/build.sh  (build inicial completo)"
-echo "   ou peça ao Claude Code para ler docs/ARCHITECTURE.md e iniciar a implementação."
+echo ">> Next step: ./scripts/build.sh  (initial full build)"
+echo "   or ask Claude Code to read docs/ARCHITECTURE.md and start implementing."

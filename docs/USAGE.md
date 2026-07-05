@@ -1,146 +1,146 @@
-# USAGE.md — Guia de uso do plugin `selective_trace`
+# USAGE.md — `selective_trace` plugin usage guide
 
-Plugin de trace seletivo para **MariaDB 11.4 e 12.3+** que loga apenas queries
-que tocam schemas/tabelas configurados — uma alternativa de baixo overhead ao
-`general_log`.
+Selective query trace plugin for **MariaDB 11.4 and 12.3+** that logs only
+queries touching the configured schemas/tables — a low-overhead alternative
+to `general_log`.
 
 ---
 
-## 0. Plataformas suportadas
+## 0. Supported platforms
 
-O plugin é um binário nativo — use o `.so` compilado para a plataforma do
-servidor:
+The plugin is a native binary — use the `.so` compiled for the server's
+platform:
 
-| Plataforma / série do servidor | Build |
+| Platform / server series | Build |
 |---|---|
-| Ubuntu 22.04+/Debian · MariaDB 11.4 (glibc ≥ 2.35) | `build/plugin_output/selective_trace.so` (container `dev`) |
-| Oracle Linux / RHEL / Rocky / Alma **8 e 9** · MariaDB **11.4** | `build/plugin_output-ol8/selective_trace.so` (container `dev-ol8`, glibc ≥ 2.17) |
-| Oracle Linux / RHEL 8+ · MariaDB **12.3+** | `build/plugin_output-123-ol9/selective_trace.so` (container `dev-123-ol8`) |
-| Windows | não suportado nesta versão (código usa POSIX; porte viável, ver README) |
+| Ubuntu 22.04+/Debian · MariaDB 11.4 (glibc ≥ 2.35) | `build/plugin_output/selective_trace.so` (`dev` container) |
+| Oracle Linux / RHEL / Rocky / Alma **8 and 9** · MariaDB **11.4** | `build/plugin_output-ol8/selective_trace.so` (`dev-ol8` container, glibc ≥ 2.17) |
+| Oracle Linux / RHEL 8+ · MariaDB **12.3+** | `build/plugin_output-123-ol9/selective_trace.so` (`dev-123-ol8` container) |
+| Windows | not supported in this version (POSIX code; port feasible, see README) |
 
-Os builds EL exigem só GLIBC_2.17+, então carregam em EL8, EL9 e distros
-mais novas. **Validados em Oracle Linux 8 e 9** com os RPMs oficiais
-(mariadb.org), smoke test completo (FILE, TABLE, JOIN cross-schema,
+The EL builds require only GLIBC_2.17+, so they load on EL8, EL9 and newer
+distros. **Validated on Oracle Linux 8 and 9** with the official RPMs
+(mariadb.org), full smoke test (FILE, TABLE, cross-schema JOIN,
 UNINSTALL/INSTALL):
 
-- **MariaDB 11.4.12** → `plugin_output-ol8/` (OL8 e OL9)
+- **MariaDB 11.4.12** → `plugin_output-ol8/` (OL8 and OL9)
 - **MariaDB 12.3.2** → `plugin_output-123-ol9/` (OL9)
 
-> ⚠️ **A série do servidor importa**: a audit ABI mudou de `0x0302` (11.4)
-> para `0x0303` (12.3), então o `.so` de 11.4 **não** carrega num servidor
-> 12.3 e vice-versa. Use o build da série correspondente. Para outras séries
-> (10.11, 11.8...), recompile contra o fonte daquela série.
+> ⚠️ **The server series matters**: the audit ABI changed from `0x0302`
+> (11.4) to `0x0303` (12.3), so the 11.4 `.so` will **not** load on a 12.3
+> server and vice versa. Use the build for the matching series. For other
+> series (10.11, 11.8...), recompile against that series' source.
 
-Build para 12.3+:
+Build for 12.3+:
 
 ```bash
 docker compose -f docker/docker-compose.yml --profile v123 up -d --build dev-123-ol8
 docker exec mariadb-plugin-dev-123-ol8 bash -lc \
   './scripts/download-mariadb-source.sh && ./scripts/build.sh full && ./scripts/build.sh --package'
-# valida num OL9 limpo com MariaDB 12.3 via RPM oficial:
+# validate on a clean OL9 with MariaDB 12.3 via official RPM:
 docker run --rm -i -v "$PWD/build/plugin_output-123-ol9:/plugin_out:ro" \
     oraclelinux:9 bash < scripts/validate-123-ol9.sh
 ```
 
-Para validar em OL9, o mesmo script serve (só muda a imagem):
+To validate on OL9, the same script works (only the image changes):
 
 ```bash
 docker run --rm -i -v "$PWD/build/plugin_output-ol8:/plugin_out:ro" \
     oraclelinux:9 bash < scripts/validate-ol8.sh
 ```
 
-Como gerar o build EL8:
+How to produce the EL8 build:
 
 ```bash
 docker compose -f docker/docker-compose.yml --profile ol8 up -d --build dev-ol8
 docker exec mariadb-plugin-dev-ol8 bash -lc 'cd /workspace && ./scripts/build.sh full && ./scripts/build.sh --package'
-# valida num OL8 limpo com MariaDB 11.4 via RPM oficial:
+# validate on a clean OL8 with MariaDB 11.4 via official RPM:
 docker run --rm -i -v "$PWD/build/plugin_output-ol8:/plugin_out:ro" \
     oraclelinux:8 bash < scripts/validate-ol8.sh
 ```
 
-No servidor de destino (OL8+ com MariaDB via RPM), o `plugin_dir` é
-`/usr/lib64/mysql/plugin/` — copie o `.so` para lá.
+On the target server (OL8+ with MariaDB via RPM), the `plugin_dir` is
+`/usr/lib64/mysql/plugin/` — copy the `.so` there.
 
-## 1. Instalação
+## 1. Installation
 
-Copie `selective_trace.so` para o `plugin_dir` do servidor (confira com
-`SHOW GLOBAL VARIABLES LIKE 'plugin_dir'`) e:
+Copy `selective_trace.so` to the server's `plugin_dir` (check it with
+`SHOW GLOBAL VARIABLES LIKE 'plugin_dir'`) and:
 
 ```sql
 INSTALL PLUGIN selective_trace SONAME 'selective_trace.so';
 ```
 
-Ou via configuração (carrega no startup):
+Or via configuration (loads at startup):
 
 ```ini
 [mysqld]
 plugin-load-add=selective_trace.so
-# o plugin declara maturity "experimental"; libere se o servidor usar o
-# default (gamma):
+# the plugin declares "experimental" maturity; allow it if the server uses
+# the default (gamma):
 plugin-maturity=experimental
 ```
 
-Para remover:
+To remove it:
 
 ```sql
 UNINSTALL PLUGIN selective_trace;
 ```
 
-> O plugin **não** exige `general_log=ON` — os eventos de audit são
-> gerados pelo servidor independentemente do general log.
+> The plugin does **not** require `general_log=ON` — the audit events are
+> emitted by the server regardless of the general log.
 
-## 2. Variáveis de sistema
+## 2. System variables
 
-Todas dinâmicas (`SET GLOBAL`), sem restart:
+All dynamic (`SET GLOBAL`), no restart needed:
 
-| Variável | Tipo | Default | Descrição |
+| Variable | Type | Default | Description |
 |---|---|---|---|
-| `selective_trace_enabled` | BOOL | `OFF` | Liga/desliga a captura |
-| `selective_trace_schemas_to_log` | VARCHAR | `''` | Lista de schemas separados por vírgula |
-| `selective_trace_tables_to_log` | VARCHAR | `''` | Lista `schema.tabela` separada por vírgula (cross-schema); `schema.*` = todo o schema |
-| `selective_trace_output` | ENUM | `FILE` | `FILE` (JSON por linha) ou `TABLE` (`mysql.selective_trace_events`) |
-| `selective_trace_file_path` | VARCHAR | `selective_trace.json` | Arquivo de log no modo FILE (relativo = datadir) |
-| `selective_trace_min_duration_ms` | INT | `0` | Só loga queries mais lentas que N ms (0 = todas) |
-| `selective_trace_mask_passwords` | BOOL | `ON` | Substitui senhas de DCL (`IDENTIFIED BY`, `SET PASSWORD`, `PASSWORD()`) por `***` antes de logar |
+| `selective_trace_enabled` | BOOL | `OFF` | Enable/disable capture |
+| `selective_trace_schemas_to_log` | VARCHAR | `''` | Comma-separated list of schemas |
+| `selective_trace_tables_to_log` | VARCHAR | `''` | Comma-separated `schema.table` list (cross-schema); `schema.*` = the whole schema |
+| `selective_trace_output` | ENUM | `FILE` | `FILE` (one JSON line) or `TABLE` (`mysql.selective_trace_events`) |
+| `selective_trace_file_path` | VARCHAR | `selective_trace.json` | Log file in FILE mode (relative = datadir) |
+| `selective_trace_min_duration_ms` | INT | `0` | Log only queries slower than N ms (0 = all) |
+| `selective_trace_mask_passwords` | BOOL | `ON` | Replace DCL secrets (`IDENTIFIED BY`, `SET PASSWORD`, `PASSWORD()`) with `***` before logging |
 
-### Filtro por tipo de comando (por entrada)
+### Filter by command type (per entry)
 
-Toda entrada das duas listas aceita um qualificador opcional `:cmd1|cmd2`
-restringindo **quais comandos** são logados para aquele schema/tabela:
+Every entry in both lists accepts an optional `:cmd1|cmd2` qualifier
+restricting **which commands** are logged for that schema/table:
 
 ```sql
--- schema "vendas" só INSERT e UPDATE; schema "rh" tudo
-SET GLOBAL selective_trace_schemas_to_log = 'vendas:insert|update, rh';
+-- schema "sales" only INSERT and UPDATE; schema "hr" everything
+SET GLOBAL selective_trace_schemas_to_log = 'sales:insert|update, hr';
 
--- tabela app.pedidos só DELETE; todo o schema logs só DML
-SET GLOBAL selective_trace_tables_to_log = 'app.pedidos:delete, logs.*:dml';
+-- table app.orders only DELETE; the whole "logs" schema only DML
+SET GLOBAL selective_trace_tables_to_log = 'app.orders:delete, logs.*:dml';
 ```
 
-Tokens válidos: `select`, `insert`, `update`, `delete`, `replace`, `load`,
-`call`, `create`, `alter`, `drop`, `truncate`, `rename`, `other`, e os
-grupos `dml` (insert|update|delete|replace|load), `ddl`
-(create|alter|drop|truncate|rename) e `all`. Sem qualificador = todos os
-comandos. Token desconhecido faz o `SET GLOBAL` falhar. Entradas duplicadas
-têm as máscaras mescladas (`a:insert, a:update` ≡ `a:insert|update`).
+Valid tokens: `select`, `insert`, `update`, `delete`, `replace`, `load`,
+`call`, `create`, `alter`, `drop`, `truncate`, `rename`, `other`, and the
+groups `dml` (insert|update|delete|replace|load), `ddl`
+(create|alter|drop|truncate|rename) and `all`. No qualifier = all commands.
+An unknown token makes the `SET GLOBAL` fail. Duplicate entries have their
+masks merged (`a:insert, a:update` ≡ `a:insert|update`).
 
-O comando do statement é o mesmo do campo `command` (primeira palavra-chave
-do SQL, ignorando comentários); `WITH` (CTE) conta como `select`. Statements
-que não são classificáveis caem em `other`.
+The statement's command is the same as the `command` field (first SQL
+keyword, ignoring comments); `WITH` (CTE) counts as `select`. Statements that
+cannot be classified fall under `other`.
 
-### Semântica dos filtros
+### Filter semantics
 
-- **Ambas as listas vazias ⇒ nada é logado** (fail-safe: o plugin nunca vira
-  um general_log acidental).
-- Query loga se: **alguma tabela tocada** casa com `tables_to_log`, **ou** a
-  tabela/schema tocado ou o **schema corrente da sessão** casa com
+- **Both lists empty ⇒ nothing is logged** (fail-safe: the plugin never
+  accidentally becomes a general_log).
+- A query is logged if: **some touched table** matches `tables_to_log`, **or**
+  the touched table/schema or the **session's current schema** matches
   `schemas_to_log`.
-- `JOIN` multi-tabela: basta **uma** tabela casar para logar (o registro traz
-  todas as tabelas tocadas).
-- Matching **case-insensitive** (ASCII); backticks opcionais são aceitos.
-- Statements que não tocam tabela (`SET`, `SHOW`, `SELECT 1`) só são logados
-  se o schema corrente da sessão (`USE ...`) casar com o filtro de schemas.
-- Valores inválidos são rejeitados na hora do `SET GLOBAL`:
+- Multi-table `JOIN`: a single matching table is enough to log (the record
+  carries all touched tables).
+- Matching is **case-insensitive** (ASCII); optional backticks are accepted.
+- Statements that touch no table (`SET`, `SHOW`, `SELECT 1`) are logged only
+  if the session's current schema (`USE ...`) matches the schema filter.
+- Invalid values are rejected at `SET GLOBAL` time:
 
 ```
 SET GLOBAL selective_trace_tables_to_log='nodot';
@@ -148,28 +148,28 @@ ERROR 1231: selective_trace: invalid entry 'nodot' in tables_to_log
             (expected schema.table or schema.*)
 ```
 
-### Exemplos
+### Examples
 
 ```sql
--- Auditar tudo que tocar o schema de produção "vendas"
-SET GLOBAL selective_trace_schemas_to_log = 'vendas';
+-- Trace everything touching the production schema "sales"
+SET GLOBAL selective_trace_schemas_to_log = 'sales';
 SET GLOBAL selective_trace_enabled = ON;
 
--- Auditar só duas tabelas sensíveis, independente do schema da sessão
+-- Trace only two sensitive tables, regardless of the session schema
 SET GLOBAL selective_trace_schemas_to_log = '';
-SET GLOBAL selective_trace_tables_to_log = 'rh.salarios,financeiro.pagamentos';
+SET GLOBAL selective_trace_tables_to_log = 'hr.salaries,finance.payments';
 
--- Todo o schema "logs" + uma tabela avulsa
-SET GLOBAL selective_trace_tables_to_log = 'logs.*,app.pedidos';
+-- The whole "logs" schema + one standalone table
+SET GLOBAL selective_trace_tables_to_log = 'logs.*,app.orders';
 
--- Só queries lentas (>250ms) do schema app
+-- Only slow queries (>250ms) of the app schema
 SET GLOBAL selective_trace_schemas_to_log = 'app';
 SET GLOBAL selective_trace_min_duration_ms = 250;
 ```
 
-## 3. Modo FILE (default)
+## 3. FILE mode (default)
 
-Uma linha JSON por evento em `selective_trace_file_path`:
+One JSON line per event in `selective_trace_file_path`:
 
 ```json
 {"ts":"2026-07-04 03:33:44.401","conn_id":4,"query_id":7,
@@ -178,49 +178,50 @@ Uma linha JSON por evento em `selective_trace_file_path`:
  "query":"SELECT * FROM testdb.t1"}
 ```
 
-Campos:
+Fields:
 
-| Campo | Significado |
+| Field | Meaning |
 |---|---|
-| `ts` | Timestamp local com milissegundos |
-| `conn_id` | `connection_id` da sessão |
-| `query_id` | Id interno do statement (correlaciona com a tabela de log) |
-| `user` | `usuario@host` |
-| `db` | Schema corrente da sessão (vazio se não houver `USE`) |
-| `tables` | Tabelas tocadas pelo statement (`schema.tabela`) |
-| `command` | Primeira palavra-chave do SQL (`SELECT`, `INSERT`, `CREATE`...) |
-| `duration_ms` | Duração com precisão de ms (`null` se o início não foi visto) |
-| `error_code` | 0 = sucesso; senão o código do erro (ex.: 1146) |
-| `query` | Texto completo da query |
+| `ts` | Local timestamp with milliseconds |
+| `conn_id` | The session's `connection_id` |
+| `query_id` | Internal statement id (correlates with the log table) |
+| `user` | `user@host` |
+| `db` | Session's current schema (empty if no `USE`) |
+| `tables` | Tables touched by the statement (`schema.table`) |
+| `command` | First SQL keyword (`SELECT`, `INSERT`, `CREATE`...) |
+| `duration_ms` | Duration with ms precision (`null` if the start wasn't seen) |
+| `error_code` | 0 = success; otherwise the error code (e.g. 1146) |
+| `query` | Full query text |
 
-Notas:
-- Tabelas internas de bookkeeping de estatísticas (`mysql.table_stats`,
+Notes:
+- Internal statistics bookkeeping tables (`mysql.table_stats`,
   `mysql.column_stats`, `mysql.index_stats`, `mysql.innodb_table_stats`,
-  `mysql.innodb_index_stats`) são tocadas como efeito colateral de DML comum
-  e **não** entram em `tables` — a menos que estejam explicitamente em
+  `mysql.innodb_index_stats`) are touched as a side effect of ordinary DML
+  and do **not** appear in `tables` — unless they are explicitly listed in
   `selective_trace_tables_to_log`.
-- `command` ignora comentários iniciais de todos os sabores (`-- `, `#`,
-  `/* */`, `/*! */`, `/*M! */`) e parênteses — um `INSERT` enviado com
-  comentário anexado (comportamento padrão do DBeaver) classifica como
-  `INSERT`. O campo `query` preserva o texto exato recebido, comentários
-  incluídos (fidelidade de trace, como o general_log).
-- Se um statement tocar tabelas demais para o buffer por conexão (~3,9 KB de
-  nomes), o JSON ganha `"tables_truncated":true` (na tabela de log, a lista
-  termina em `,...`).
-- Statements dentro de stored procedures/functions geram eventos próprios
-  (um por sub-statement, com suas tabelas), além do evento do `CALL`.
-- O arquivo não tem rotação por tamanho — use logrotate/Fluentd/Filebeat.
-- O caminho é reaberto automaticamente ao mudar
-  `selective_trace_file_path`.
+- `command` ignores leading comments of every flavor (`-- `, `#`, `/* */`,
+  `/*! */`, `/*M! */`) and parentheses — an `INSERT` sent with an attached
+  comment (DBeaver's default behavior) is classified as `INSERT`. The `query`
+  field preserves the exact text received, comments included (trace fidelity,
+  like general_log).
+- If a statement touches more tables than the per-connection buffer holds
+  (~3.9 KB of names), the JSON gains `"tables_truncated":true` (in the log
+  table, the list ends with `,...`).
+- Statements inside stored procedures/functions produce their own events
+  (one per sub-statement, with their tables), in addition to the `CALL`
+  event.
+- The file has no size-based rotation — use logrotate/Fluentd/Filebeat.
+- The path is reopened automatically when `selective_trace_file_path`
+  changes.
 
-## 4. Modo TABLE
+## 4. TABLE mode
 
 ```sql
 SET GLOBAL selective_trace_output = 'TABLE';
 ```
 
-Os eventos são inseridos em **`mysql.selective_trace_events`** (criada
-automaticamente no primeiro uso):
+Events are inserted into **`mysql.selective_trace_events`** (created
+automatically on first use):
 
 ```sql
 CREATE TABLE mysql.selective_trace_events (
@@ -239,32 +240,34 @@ CREATE TABLE mysql.selective_trace_events (
 ) ENGINE=Aria TRANSACTIONAL=0 DEFAULT CHARSET=utf8mb4;
 ```
 
-Como funciona por baixo:
-- A escrita é **assíncrona**: uma thread interna do plugin consome uma fila
-  (até 10000 eventos) e executa os INSERTs numa conexão interna com
-  `sql_log_bin=0` (não replica). Eventos podem levar alguns ms para aparecer.
-- Se a fila encher (burst maior que a vazão de INSERT), eventos são
-  descartados e contados em `Selective_trace_events_dropped`.
-- O plugin **nunca loga os próprios INSERTs** (guard de reentrância por
-  thread) — sem loop de auto-log, mesmo com `mysql` no filtro.
-- Se a tabela for dropada, é recriada no INSERT seguinte.
+How it works under the hood:
+- Writing is **asynchronous**: a dedicated plugin thread consumes a queue
+  (up to 10000 events) and runs the INSERTs on an internal connection with
+  `sql_log_bin=0` (does not replicate). Events may take a few ms to appear.
+- If the queue fills up (burst above the INSERT throughput), events are
+  dropped and counted in `Selective_trace_events_dropped`.
+- The plugin **never logs its own INSERTs** (per-thread reentrancy guard) —
+  no self-log loop, even with `mysql` in the filter.
+- If the table is dropped, it is recreated on the next INSERT.
 
 ## 5. Status (`SHOW GLOBAL STATUS LIKE 'selective_trace%'`)
 
-| Variável | Significado |
+| Variable | Meaning |
 |---|---|
-| `Selective_trace_events_logged` | Eventos aceitos (escritos ou enfileirados) |
-| `Selective_trace_write_failures` | Falhas de escrita (arquivo + tabela) |
-| `Selective_trace_events_dropped` | Eventos descartados por fila cheia (modo TABLE) |
+| `Selective_trace_events_logged` | Events accepted (written or queued) |
+| `Selective_trace_write_failures` | Write failures (file + table) |
+| `Selective_trace_events_dropped` | Events dropped due to a full queue (TABLE mode) |
+| `Selective_trace_callback_errors` | Exceptions swallowed at the C boundaries (memory pressure/bug) |
 
-## 6. Limitações conhecidas
+## 6. Known limitations
 
-- `duration_ms` é medido pelo próprio plugin (clock monotônico entre o
-  início do dispatch e o fim do statement); se o plugin for habilitado no
-  meio de um statement, o primeiro evento sai com `duration_ms` nulo.
-- Com query cache ativo (OFF por default no 11.4), SELECTs servidos do cache
-  não geram eventos de tabela.
-- O filtro por tabela usa os eventos de lock por statement; comandos que não
-  tocam tabelas dependem do filtro de schema da sessão.
-- Identificadores com `.` ou `,` no nome não são suportados nas listas.
-- Matching de identificadores é ASCII case-insensitive (não usa collation).
+- `duration_ms` is measured by the plugin itself (monotonic clock between
+  dispatch start and statement end); if the plugin is enabled mid-statement,
+  the first event comes out with a null `duration_ms`.
+- With the query cache on (OFF by default in 11.4), SELECTs served from the
+  cache produce no table events.
+- The table filter uses per-statement lock events; commands that touch no
+  table depend on the session schema filter.
+- Identifiers containing `.` or `,` in the name are not supported in the
+  lists.
+- Identifier matching is ASCII case-insensitive (does not use collation).

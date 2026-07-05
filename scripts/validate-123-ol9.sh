@@ -1,27 +1,27 @@
 #!/usr/bin/env bash
 # ---------------------------------------------------------------------------
-# validate-123-ol9.sh — valida o selective_trace.so buildado para MariaDB
-# 12.3+ (audit interface 0x0303) num Oracle Linux 9 limpo com MariaDB 12.3
-# instalado via RPM oficial.
+# validate-123-ol9.sh — validates the selective_trace.so built for MariaDB
+# 12.3+ (audit interface 0x0303) on a clean Oracle Linux 9 with MariaDB 12.3
+# installed via the official RPM.
 #
-# Roda DENTRO de um container oraclelinux:9 (como root) com o .so montado
-# em /plugin_out:
+# Runs INSIDE an oraclelinux:9 container (as root) with the .so mounted
+# at /plugin_out:
 #   docker run --rm -i -v "<repo>/build/plugin_output-123-ol9:/plugin_out:ro" \
 #       oraclelinux:9 bash < scripts/validate-123-ol9.sh
 # ---------------------------------------------------------------------------
 set -euo pipefail
 
-echo ">> [1/4] Configurando repo MariaDB 12.3 e instalando RPMs"
+echo ">> [1/4] Setting up the MariaDB 12.3 repo and installing RPMs"
 curl -LsS https://r.mariadb.com/downloads/mariadb_repo_setup \
     | bash -s -- --mariadb-server-version=mariadb-12.3 >/dev/null
 dnf -y install MariaDB-server MariaDB-client >/dev/null
 mariadbd --version
 
-echo ">> [2/4] Instalando o plugin e inicializando o datadir"
+echo ">> [2/4] Installing the plugin and initializing the datadir"
 cp /plugin_out/selective_trace.so /usr/lib64/mysql/plugin/
 mariadb-install-db --user=mysql >/dev/null
 
-echo ">> [3/4] Subindo mariadbd com o plugin"
+echo ">> [3/4] Starting mariadbd with the plugin"
 /usr/sbin/mariadbd --user=mysql --skip-networking \
     --socket=/tmp/m.sock \
     --plugin-load-add=selective_trace.so \
@@ -41,7 +41,7 @@ $M -e "SELECT VERSION() AS versao"
 $M -e "SELECT PLUGIN_NAME, PLUGIN_STATUS, PLUGIN_AUTH_VERSION
        FROM information_schema.PLUGINS WHERE PLUGIN_NAME='selective_trace'"
 
-echo ">> [4/4] Smoke test funcional"
+echo ">> [4/4] Functional smoke test"
 $M --force <<'SQL'
 CREATE DATABASE hotdb;
 CREATE DATABASE colddb;
@@ -67,4 +67,4 @@ $M -e "UNINSTALL PLUGIN selective_trace;
        INSTALL PLUGIN selective_trace SONAME 'selective_trace.so';
        SELECT 'servidor vivo' AS status"
 mariadb-admin -uroot -S /tmp/m.sock shutdown
-echo ">> VALIDACAO 12.3 + OL9 CONCLUIDA"
+echo ">> 12.3 + OL9 VALIDATION COMPLETE"

@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # ---------------------------------------------------------------------------
-# benchmark-profile.sh — teste com perfil de produção:
+# benchmark-profile.sh — production-profile test:
 #   ~100k SELECT/min + ~20k INSERT/UPDATE/DELETE/min  (83% leitura / 17% escrita)
 #
-# Mix exato 15 SELECT : 3 writes (1 INSERT + 1 UPDATE + 1 DELETE) por iteração.
+# Exact mix 15 SELECT : 3 writes (1 INSERT + 1 UPDATE + 1 DELETE) per iteration.
 #
-# Parte 1 — capacidade (full speed): qps por cenário → headroom sobre a
+# Part 1 — capacity (full speed): qps per scenario -> headroom over the
 #           demanda real (~2.000 qps).
-# Parte 2 — sustentado (SUSTAIN_SECS, default 300s) no cenário realista
+# Part 2 — sustained (SUSTAIN_SECS, default 300s) in the realistic scenario
 #           (filtro schema:dml, output FILE): RSS do mariadbd, contadores do
 #           plugin e crescimento do arquivo amostrados a cada 30s.
 #
@@ -15,14 +15,14 @@
 # ---------------------------------------------------------------------------
 set -euo pipefail
 
-# MYSQL_ARGS permite apontar para outra instância (ex.: socket no OL8:
+# MYSQL_ARGS lets you point to another instance (e.g. socket on OL8:
 #   MYSQL_ARGS="-uroot -S /tmp/m.sock")
 MYSQL_ARGS="${MYSQL_ARGS:--uroot -p${MARIADB_ROOT_PASSWORD:-devpassword}}"
 MYSQL="mariadb $MYSQL_ARGS"
 SLAP="mariadb-slap $MYSQL_ARGS"
 
 CONCURRENCY="${PROFILE_CONCURRENCY:-16}"
-QUERIES="${PROFILE_QUERIES:-36000}"      # múltiplo de 18 (1 iteração = 18 queries)
+QUERIES="${PROFILE_QUERIES:-36000}"      # multiple of 18 (1 iteration = 18 queries)
 SUSTAIN_SECS="${SUSTAIN_SECS:-300}"
 LOG_PATH="${PROFILE_LOG_PATH:-/var/lib/mysql/selective_profile.json}"
 
@@ -80,7 +80,7 @@ set_scenario OFF ON '' FILE
 scenario general_log
 $MYSQL -e "SET GLOBAL general_log=OFF"
 
-# realista: só o DML do schema é auditado; SELECTs caem no caminho barato
+# realistic: only the schema's DML is traced; SELECTs take the cheap path
 set_scenario ON OFF 'app_main:dml' FILE
 scenario sel_dml_file
 
@@ -92,7 +92,7 @@ set_scenario ON OFF 'app_main' FILE
 scenario sel_all_file
 
 echo ""
-echo "== PARTE 2: sustentado ${SUSTAIN_SECS}s no cenário realista (app_main:dml, FILE) =="
+echo "== PART 2: sustained ${SUSTAIN_SECS}s in the realistic scenario (app_main:dml, FILE) =="
 prepare
 set_scenario ON OFF 'app_main:dml' FILE
 

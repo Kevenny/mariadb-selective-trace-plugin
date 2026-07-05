@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # ---------------------------------------------------------------------------
-# valgrind-test.sh — Etapa 5: valida ausência de leaks atribuíveis ao plugin
+# valgrind-test.sh — validates the absence of leaks attributable to the plugin
 #
 # Roda DENTRO do container de desenvolvimento (mariadb-plugin-dev), que tem
-# o mariadbd compilado com símbolos em /opt/mariadb-build:
+# the mariadbd built with symbols in /opt/mariadb-build:
 #   docker exec -i mariadb-plugin-dev bash < scripts/valgrind-test.sh
 #
 # Sobe o mariadbd sob Valgrind com o selective_trace carregado, roda uma
-# bateria de queries cobrindo os dois modos de saída e as trocas de filtro,
+# a battery of queries covering both output modes and filter changes,
 # derruba o servidor de forma limpa e reporta leaks com frames do plugin.
 # ---------------------------------------------------------------------------
 set -euo pipefail
@@ -50,7 +50,7 @@ for i in $(seq 1 180); do
 done
 $CLIENT -e "SELECT VERSION()" >/dev/null
 
-echo ">> Bateria de exercício do plugin"
+echo ">> Plugin exercise battery"
 # --force: a bateria inclui um erro de SQL proposital (evento com error_code)
 $CLIENT --force <<'SQL'
 CREATE DATABASE vg_hot;
@@ -91,7 +91,7 @@ SET PASSWORD FOR vguser@localhost = PASSWORD('vgsecret2');
 DROP USER IF EXISTS vguser@localhost;
 SET GLOBAL selective_trace_schemas_to_log='vg_hot';
 
--- modo TABLE (thread interna + criação lazy da tabela)
+-- TABLE mode (internal thread + lazy table creation)
 SET GLOBAL selective_trace_output='TABLE';
 INSERT INTO vg_hot.t (v) VALUES ('table-mode');
 SELECT COUNT(*) FROM vg_hot.t;

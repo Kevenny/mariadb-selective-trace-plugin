@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ---------------------------------------------------------------------------
-# security-test.sh — validação de segurança adversarial do selective_trace,
-# focada em OL9 (SELinux, permissões) mas útil em qualquer plataforma.
+# security-test.sh — adversarial security validation of selective_trace,
+# focused on OL9 (SELinux, permissions) but useful on any platform.
 #
 # Roda DENTRO de um oraclelinux:9 com o .so em /plugin_out:
 #   docker run --rm -i -v "<repo>/build/plugin_output-ol8:/plugin_out:ro" \
@@ -18,7 +18,7 @@ cp /plugin_out/selective_trace.so /usr/lib64/mysql/plugin/
 mariadb-install-db --user=mysql >/dev/null 2>&1
 
 echo ">> SELinux status do ambiente:"
-getenforce 2>/dev/null || echo "(getenforce indisponível — SELinux não ativo neste kernel/container)"
+getenforce 2>/dev/null || echo "(getenforce unavailable — SELinux not active in this kernel/container)"
 ls -Z /usr/lib64/mysql/plugin/selective_trace.so 2>/dev/null || \
   ls -l /usr/lib64/mysql/plugin/selective_trace.so
 
@@ -39,7 +39,7 @@ $M -e "CREATE DATABASE app; CREATE TABLE app.t (id INT PRIMARY KEY AUTO_INCREMEN
 
 # =====================================================================
 echo ""
-echo "### T1 — Injeção de SQL no modo TABLE (sql_mode default)"
+echo "### T1 — SQL injection in TABLE mode (default sql_mode)"
 # =====================================================================
 $M -e "SET GLOBAL selective_trace_output='TABLE'"
 $M app -e "TRUNCATE t" 2>/dev/null
@@ -52,23 +52,23 @@ SQL
 sleep 2
 # a tabela mysql.user (global_priv) tem que continuar existindo:
 if $M -e "SELECT COUNT(*) FROM mysql.global_priv" >/dev/null 2>&1; then
-    ok "mysql.global_priv intacta (INSERT interno não foi injetado)"
+    ok "mysql.global_priv intact (internal INSERT was not injected)"
 else
-    bad "tabela de privilégios sumiu — injeção de SQL!"
+    bad "privileges table gone — SQL injection!"
 fi
-# nenhuma linha órfã/extra na tabela de log além dos eventos legítimos:
+# no orphan/extra row in the log table beyond the legitimate events:
 n=$($M -N -e "SELECT COUNT(*) FROM mysql.selective_trace_events")
 echo "  (eventos na tabela de log: $n)"
-# a query maliciosa foi gravada como DADO (uma linha), não executada:
+# the malicious query was stored as DATA (one row), not executed:
 if $M -N -e "SELECT COUNT(*) FROM mysql.selective_trace_events WHERE query LIKE '%DROP TABLE mysql.user%'" | grep -q 1; then
-    ok "payload gravado como texto literal, não executado"
+    ok "payload stored as literal text, not executed"
 else
-    bad "payload não encontrado literalmente (escaping alterou o dado?)"
+    bad "payload not found literally (did escaping alter the data?)"
 fi
 
 # =====================================================================
 echo ""
-echo "### T2 — Injeção no modo TABLE com sql_mode=NO_BACKSLASH_ESCAPES"
+echo "### T2 — Injection in TABLE mode with sql_mode=NO_BACKSLASH_ESCAPES"
 # =====================================================================
 $M -e "SET GLOBAL sql_mode='NO_BACKSLASH_ESCAPES'"
 $M app -e "TRUNCATE t" 2>/dev/null
@@ -81,9 +81,9 @@ wf=$($M -N -e "SHOW GLOBAL STATUS LIKE 'Selective_trace_write_failures'" | awk '
 alive=$($M -N -e "SELECT 1" 2>/dev/null)
 echo "  write_failures=$wf  (tabelas antes=$before depois=$after servidor_vivo=$alive)"
 if [ "$alive" = "1" ] && [ "$before" = "$after" ]; then
-    ok "servidor íntegro sob NO_BACKSLASH_ESCAPES"
+    ok "server intact under NO_BACKSLASH_ESCAPES"
     if [ "${wf:-0}" -gt 0 ]; then
-        echo "  NOTA: $wf INSERT(s) de log falharam — dado escapado ficou inválido para esse sql_mode (evento perdido, sem injeção)"
+        echo "  NOTE: $wf log INSERT(s) failed — escaped data was invalid for this sql_mode (event lost, no injection)"
     fi
 else
     bad "anomalia sob NO_BACKSLASH_ESCAPES"
@@ -92,7 +92,7 @@ $M -e "SET GLOBAL sql_mode=DEFAULT"
 
 # =====================================================================
 echo ""
-echo "### T3 — Injeção de JSON/log no modo FILE"
+echo "### T3 — JSON/log injection in FILE mode"
 # =====================================================================
 $M -e "SET GLOBAL selective_trace_output='FILE'"
 : > /var/lib/mysql/sec.json 2>/dev/null || true
@@ -102,7 +102,7 @@ SELECT '}
 {"injected":"newline real"}' AS x;
 SQL
 sleep 1
-# toda linha do arquivo tem que ser JSON válido e as chaves fixas:
+# every line of the file must be valid JSON with the fixed keys:
 python3 - <<'PY'
 import json,sys
 keys={'ts','conn_id','query_id','user','db','tables','command','duration_ms','error_code','query'}
@@ -114,13 +114,13 @@ for i,line in enumerate(open('/var/lib/mysql/sec.json'),1):
     try:
         o=json.loads(line)
     except Exception as e:
-        print(f"  FAIL: linha {i} não é JSON válido: {e}"); bad+=1; continue
+        print(f"  FAIL: line {i} is not valid JSON: {e}"); bad+=1; continue
     if set(o)!=keys:
         print(f"  FAIL: linha {i} chaves inesperadas: {set(o)^keys}"); bad+=1
-print(f"  {n} linhas, {'0 inválidas' if bad==0 else str(bad)+' INVÁLIDAS'}")
+print(f"  {n} lines, {'0 invalid' if bad==0 else str(bad)+' INVALID'}")
 sys.exit(1 if bad else 0)
 PY
-[ $? -eq 0 ] && ok "JSON permaneceu válido e uma linha por evento" || bad "injeção de JSON/linha"
+[ $? -eq 0 ] && ok "JSON stayed valid and one line per event" || bad "JSON/line injection"
 
 # =====================================================================
 echo ""
@@ -135,7 +135,7 @@ sleep 1
 if grep -q "SuperSecret123\|AnotherSecret456" /var/lib/mysql/sec.json 2>/dev/null; then
     echo "  ACHADO: senha de DCL aparece em cleartext no log"
     grep -o "SuperSecret123\|AnotherSecret456" /var/lib/mysql/sec.json | sort -u | sed 's/^/    -> /'
-    bad "segredos de DCL não são mascarados"
+    bad "DCL secrets are not masked"
 else
     ok "senhas de DCL mascaradas/ausentes"
 fi
@@ -143,18 +143,18 @@ $M -e "DROP USER IF EXISTS leaky@localhost" 2>/dev/null
 
 # =====================================================================
 echo ""
-echo "### T5 — Permissões do arquivo de log e contexto"
+echo "### T5 — Log file permissions and context"
 # =====================================================================
 ls -lnZ /var/lib/mysql/sec.json 2>/dev/null || ls -ln /var/lib/mysql/sec.json
 perm=$(stat -c '%a' /var/lib/mysql/sec.json 2>/dev/null)
 owner=$(stat -c '%U' /var/lib/mysql/sec.json 2>/dev/null)
-echo "  permissões=$perm dono=$owner"
+echo "  perms=$perm owner=$owner"
 if [ "$owner" = "mysql" ] && [ "${perm:0:1}" != "" ]; then
-    # o mundo não deveria ler o log de queries
+    # the world should not read the query log
     if [ "${perm: -1}" = "0" ] || [ "${perm: -1}" = "4" ]; then
-        echo "  NOTA: outros têm leitura (perm .$perm) — restringir via umask/ACL se o log contém dados sensíveis"
+        echo "  NOTE: others can read (perm .$perm) — restrict via umask/ACL if the log holds sensitive data"
     fi
-    ok "arquivo pertence ao usuário do mariadbd"
+    ok "file owned by the mariadbd user"
 else
     bad "dono inesperado do arquivo de log"
 fi
@@ -163,12 +163,12 @@ fi
 echo ""
 echo "### T6 — Path traversal / escrita fora do datadir"
 # =====================================================================
-# usuário com privilégio já poderia; validamos que a falha é graciosa
+# a privileged user already could; we validate the failure is graceful
 $M -e "SET GLOBAL selective_trace_file_path='/root/naopode.json'" 2>/dev/null
 $M app -e "INSERT INTO t (v) VALUES ('probe')" 2>/dev/null
 sleep 1
 alive=$($M -N -e "SELECT 1" 2>/dev/null)
-[ "$alive" = "1" ] && ok "path inacessível não derruba o servidor (falha graciosa)" || bad "servidor caiu ao usar path inválido"
+[ "$alive" = "1" ] && ok "inaccessible path does not crash the server (graceful failure)" || bad "server crashed on invalid path"
 $M -e "SET GLOBAL selective_trace_file_path='/var/lib/mysql/sec.json'" 2>/dev/null
 
 mariadb-admin -uroot -S /tmp/m.sock shutdown 2>/dev/null

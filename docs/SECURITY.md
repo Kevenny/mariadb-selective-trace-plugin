@@ -1,64 +1,65 @@
-# SECURITY.md — Modelo de ameaças e hardening do `selective_trace`
+# SECURITY.md — `selective_trace` threat model and hardening
 
-Validação de segurança adversarial do plugin, com foco em Oracle Linux 9.
-Bateria reproduzível em [`scripts/security-test.sh`](../scripts/security-test.sh)
-(container `oraclelinux:9` limpo, MariaDB 11.4.12 via RPM oficial).
+Adversarial security validation of the plugin, focused on Oracle Linux 9.
+Reproducible battery in [`scripts/security-test.sh`](../scripts/security-test.sh)
+(clean `oraclelinux:9` container, MariaDB 11.4.12 via official RPM).
 
 ---
 
-## Superfície de ataque
+## Attack surface
 
-O plugin recebe, por evento de audit, dados controlados pelo cliente
-(texto da query, `user@host`, nomes de schema/tabela resolvidos pelo parser)
-e os grava em dois destinos: arquivo JSON (modo FILE) ou
-`INSERT INTO mysql.selective_trace_events` (modo TABLE). Os vetores são a
-**injeção** desses dados no formato de saída e o **vazamento** de dados
-sensíveis presentes nas próprias queries.
+Per audit event, the plugin receives client-controlled data (query text,
+`user@host`, schema/table names resolved by the parser) and writes it to two
+destinations: a JSON file (FILE mode) or
+`INSERT INTO mysql.selective_trace_events` (TABLE mode). The vectors are
+**injection** of that data into the output format and **leakage** of
+sensitive data present in the queries themselves.
 
-Mudar a configuração exige privilégio de servidor (`SUPER` /
-`SET_USER` / `SESSION_VARIABLES_ADMIN` para `SET GLOBAL`;
-`INSERT_PLUGIN`/`CREATE PLUGIN` para instalar) — fora do controle do plugin,
-garantido pelo MariaDB.
+Changing the configuration requires server privilege (`SUPER` /
+`SET_USER` / `SESSION_VARIABLES_ADMIN` for `SET GLOBAL`;
+`INSERT_PLUGIN`/`CREATE PLUGIN` to install) — outside the plugin's control,
+enforced by MariaDB.
 
-## Resultados da bateria (OL9, plugin v0.6.0)
+## Battery results (OL9, plugin v0.6.0+)
 
-Bateria executada em duas séries do servidor, **7/7 em ambas**:
-MariaDB 11.4.12 e MariaDB 12.3.2 (RPMs oficiais em `oraclelinux:9`).
+Run against two server series, **7/7 on both**: MariaDB 11.4.12 and MariaDB
+12.3.2 (official RPMs on `oraclelinux:9`).
 
-| Teste | Vetor | Resultado |
+| Test | Vector | Result |
 |---|---|---|
-| T1 | Injeção de SQL no INSERT interno (modo TABLE), `sql_mode` default | **PASS** — payload gravado como dado literal; `mysql.global_priv` intacta |
-| T2 | Idem com `sql_mode=NO_BACKSLASH_ESCAPES` | **PASS** — writer fixa o próprio `sql_mode` (ver mitigação abaixo) |
-| T3 | Injeção de JSON/nova-linha (modo FILE) | **PASS** — toda linha continua JSON válido, um evento por linha |
-| T4 | Vazamento de senhas de DCL em cleartext | **PASS** após correção (mascaramento; era o único FAIL na primeira rodada) |
-| T5 | Permissões do arquivo de log | **PASS** — dono `mysql`, modo `0660` |
-| T6 | Path inacessível (ex.: `/root`) | **PASS** — falha graciosa, servidor íntegro |
+| T1 | SQL injection into the internal INSERT (TABLE mode), default `sql_mode` | **PASS** — payload stored as literal data; `mysql.global_priv` intact |
+| T2 | Same with `sql_mode=NO_BACKSLASH_ESCAPES` | **PASS** — the writer pins its own `sql_mode` (see mitigation below) |
+| T3 | JSON/newline injection (FILE mode) | **PASS** — every line stays valid JSON, one event per line |
+| T4 | Cleartext DCL password leakage | **PASS** after fix (masking; the only FAIL on the first run) |
+| T5 | Log file permissions | **PASS** — owner `mysql`, mode `0660` |
+| T6 | Inaccessible path (e.g. `/root`) | **PASS** — graceful failure, server intact |
 
-## Mitigações implementadas
+## Implemented mitigations
 
-### 1. Injeção de SQL no modo TABLE (defesa em profundidade)
+### 1. SQL injection in TABLE mode (defense in depth)
 
-- `sql_escape_append()` escapa `'`, `\`, NUL, `\n`, `\r`, `Ctrl-Z` ao montar
-  o INSERT.
-- **Backslash-escaping só é válido sem `NO_BACKSLASH_ESCAPES`.** Para não
-  depender do `sql_mode` global (que um `SET GLOBAL sql_mode=...` poderia
-  mudar sob os pés do writer), a conexão interna do writer executa
-  `SET SESSION sql_mode=''` ao conectar — o escaping fica sempre coerente.
-  Sem isso, um `'` no texto da query poderia quebrar o literal do INSERT.
-- Os INSERTs rodam numa conexão interna dedicada (`sql_log_bin=0`,
-  `skip_grants`), nunca na sessão do usuário.
+- `sql_escape_append()` escapes `'`, `\`, NUL, `\n`, `\r`, `Ctrl-Z` when
+  building the INSERT.
+- **Backslash escaping is only valid without `NO_BACKSLASH_ESCAPES`.** To not
+  depend on the global `sql_mode` (which a `SET GLOBAL sql_mode=...` could
+  change under the writer's feet), the writer's internal connection runs
+  `SET SESSION sql_mode=''` on connect — the escaping stays consistent.
+  Without this, a `'` in the query text could break out of the INSERT
+  literal.
+- The INSERTs run on a dedicated internal connection (`sql_log_bin=0`,
+  `skip_grants`), never on the user's session.
 
-### 2. Injeção de JSON no modo FILE
+### 2. JSON injection in FILE mode
 
-`json_escape_append()` escapa aspas, barra, e todos os controles < 0x20
-(via `\uXXXX`) — impossível injetar nova-linha (quebraria o "um evento por
-linha") ou fechar/reabrir o objeto JSON.
+`json_escape_append()` escapes quotes, backslash and all controls < 0x20
+(via `\uXXXX`) — it is impossible to inject a newline (which would break the
+"one event per line" invariant) or to close/reopen the JSON object.
 
-### 3. Mascaramento de credenciais (`selective_trace_mask_passwords`, default ON)
+### 3. Credential masking (`selective_trace_mask_passwords`, default ON)
 
-Como o plugin registra o texto completo da query (fidelidade de trace,
-como o general_log), statements de DCL exporiam senhas. `mask_secrets()`
-substitui por `***` os literais de:
+Because the plugin records the full query text (trace fidelity, like
+general_log), DCL statements would expose passwords. `mask_secrets()`
+replaces the literals of the following with `***`:
 
 - `IDENTIFIED BY '...'`
 - `IDENTIFIED BY PASSWORD '...'`
@@ -66,78 +67,79 @@ substitui por `***` os literais de:
 - `PASSWORD('...')` / `PASSWORD '...'`
 - `SET PASSWORD ... = '...'`
 
-Matching case-insensitive, respeita fronteira de palavra (uma coluna
-`password_hash` ou o texto `'my password'` num INSERT comum **não** disparam
-mascaramento) e lida com aspas escapadas dentro do segredo. Desligável com
-`SET GLOBAL selective_trace_mask_passwords=OFF` se você precisar do texto
-íntegro num ambiente controlado.
+Case-insensitive matching, respects word boundaries (a `password_hash` column
+or the text `'my password'` in an ordinary INSERT does **not** trigger
+masking) and handles escaped quotes inside the secret. Can be turned off with
+`SET GLOBAL selective_trace_mask_passwords=OFF` if you need the intact text in
+a controlled environment.
 
-> **Limitação honesta**: o mascaramento cobre as cláusulas de autenticação
-> padrão. Ele **não** conhece a semântica da sua aplicação — se você audita
-> um schema onde a própria aplicação faz `INSERT INTO users(pass) VALUES
-> ('texto')`, esse valor é dado de negócio e será logado. Trate o log como
-> um artefato sensível (permissões + retenção), como faria com o
-> general_log ou o binlog.
+> **Honest limitation**: masking covers the standard authentication clauses.
+> It does **not** understand your application's semantics — if you trace a
+> schema where the application itself runs `INSERT INTO users(pass) VALUES
+> ('text')`, that value is business data and will be logged. Treat the log as
+> a sensitive artifact (permissions + retention), as you would the
+> general_log or the binlog.
 
-## Hardening específico de Oracle Linux 9
+## Oracle Linux 9-specific hardening
 
-### SELinux (enforcing por default no OL9)
+### SELinux (enforcing by default on OL9)
 
-O `mariadbd` roda confinado no domínio `mysqld_t`. Dois pontos:
+`mariadbd` runs confined in the `mysqld_t` domain. Two points:
 
-1. **Contexto do `.so`**: ao copiar o plugin para o `plugin_dir`, aplique o
-   contexto correto senão o SELinux bloqueia o `dlopen`:
+1. **`.so` context**: when copying the plugin to `plugin_dir`, apply the
+   correct context or SELinux blocks the `dlopen`:
 
    ```bash
    cp selective_trace.so /usr/lib64/mysql/plugin/
    restorecon -v /usr/lib64/mysql/plugin/selective_trace.so
-   # (rótulo esperado: system_u:object_r:lib_t ou mysqld_plugin_exec_t)
+   # (expected label: system_u:object_r:lib_t or mysqld_plugin_exec_t)
    ```
 
-2. **Path do log (modo FILE)**: `mysqld_t` só escreve em locais rotulados
-   `mysqld_db_t` / `mysqld_log_t`. **Mantenha o log dentro do datadir**
-   (`/var/lib/mysql/…`, default) ou de um diretório com rótulo adequado. Um
-   path arbitrário (ex.: `/root`, `/tmp`) será **negado pelo SELinux**, não
-   por bug do plugin — o plugin apenas registra a falha
-   (`Selective_trace_write_failures`) sem derrubar o servidor (validado em T6).
-   Para um diretório dedicado:
+2. **Log path (FILE mode)**: `mysqld_t` only writes to locations labeled
+   `mysqld_db_t` / `mysqld_log_t`. **Keep the log inside the datadir**
+   (`/var/lib/mysql/…`, default) or a directory with a suitable label. An
+   arbitrary path (e.g. `/root`, `/tmp`) will be **denied by SELinux**, not by
+   a plugin bug — the plugin merely records the failure
+   (`Selective_trace_write_failures`) without crashing the server (validated
+   in T6). For a dedicated directory:
 
    ```bash
    semanage fcontext -a -t mysqld_log_t "/var/log/mariadb/selective(/.*)?"
    restorecon -Rv /var/log/mariadb
    ```
 
-   > Nota: a bateria automatizada roda em container cujo kernel reporta
-   > SELinux `Disabled` (limitação do host de teste), então a **negação**
-   > em si não é exercida ali — os comandos acima são o procedimento
-   > correto para o host OL9 real com `enforcing`.
+   > Note: the automated battery runs in a container whose kernel reports
+   > SELinux `Disabled` (test-host limitation), so the **denial** itself is
+   > not exercised there — the commands above are the correct procedure for
+   > the real OL9 host with `enforcing`.
 
-### Permissões e retenção do arquivo de log
+### Log file permissions and retention
 
-- O arquivo é criado com dono do processo (`mysql`) e modo `0660` (grupo
-  `mysql`). Não deixe outros usuários no grupo `mysql`.
-- O log **contém texto de query** (dados potencialmente sensíveis, mesmo com
-  senhas mascaradas). Restrinja e rotacione:
+- The file is created with the process owner (`mysql`) and mode `0660` (group
+  `mysql`). Do not add other users to the `mysql` group.
+- The log **contains query text** (potentially sensitive data, even with
+  passwords masked). Restrict and rotate it:
 
   ```bash
-  chmod 640 /var/lib/mysql/selective_trace.json   # se quiser tirar o grupo
-  # logrotate: rotacione com create 0640 mysql mysql
+  chmod 640 /var/lib/mysql/selective_trace.json   # to drop the group bit
+  # logrotate: rotate with  create 0640 mysql mysql
   ```
 
-- Modo TABLE: `mysql.selective_trace_events` herda as permissões do schema
-  `mysql` (acesso já restrito a admins). Faça expurgo periódico.
+- TABLE mode: `mysql.selective_trace_events` inherits the `mysql` schema's
+  permissions (already restricted to admins). Purge it periodically.
 
-## Boas práticas operacionais
+## Operational best practices
 
-- **Filtro mínimo**: audite só o necessário — reduz volume e exposição.
-- **Monitore** `SHOW GLOBAL STATUS LIKE 'selective_trace%'`:
-  `write_failures` (path/SELinux/disco), `events_dropped` (fila TABLE cheia),
-  `callback_errors` (pressão de memória).
-- **Kill-switch**: `SET GLOBAL selective_trace_enabled=OFF` a quente.
-- **Maturity EXPERIMENTAL**: o servidor recusa carregar por default; quem
-  instala libera conscientemente com `plugin-maturity=experimental`.
+- **Minimal filter**: trace only what you need — reduces volume and exposure.
+- **Monitor** `SHOW GLOBAL STATUS LIKE 'selective_trace%'`:
+  `write_failures` (path/SELinux/disk), `events_dropped` (full TABLE queue),
+  `callback_errors` (memory pressure).
+- **Kill switch**: `SET GLOBAL selective_trace_enabled=OFF` at runtime.
+- **EXPERIMENTAL maturity**: the server refuses to load it by default;
+  whoever installs it opts in consciously with
+  `plugin-maturity=experimental`.
 
-## Reportar vulnerabilidades
+## Reporting vulnerabilities
 
-Abra uma issue no repositório (ou contato privado ao mantenedor para
-questões sensíveis) descrevendo versão, plataforma e passos de reprodução.
+Open an issue on the repository (or privately contact the maintainer for
+sensitive matters) describing the version, platform and reproduction steps.
