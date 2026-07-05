@@ -298,3 +298,33 @@ quebras de ABI frente à 11.4, tratadas sem tocar na lógica do plugin:
 Matriz de artefatos: `plugin_output/` (Ubuntu/11.4), `plugin_output-ol8/`
 (EL8+/11.4), `plugin_output-123-ol9/` (EL8+/12.3+). Cada série do servidor
 precisa do binário compilado contra o fonte daquela série.
+
+## D19. CI (GitHub Actions): unit rápido + integração matricial por série
+
+Objetivo de comunidade: dar o selo "testado em CI" que faltava frente ao
+server_audit. Estrutura em .github/workflows/ci.yml:
+
+- **unit-tests** (gate rápido, todo push/PR): compila e roda os testes
+  standalone do filter_engine com g++ — segundos, sem MariaDB.
+- **integration** (matriz 11.4.4 × 12.3.2, gated a main/PR/schedule/manual):
+  builda o servidor+plugin contra o fonte real de cada série (via
+  Dockerfile.ol8 + build.sh) e roda a suíte MTR (run-mtr.sh), publicando o
+  .so como artefato. É caro (~40 min/série), daí o gating e o cache de
+  ccache entre execuções.
+
+Por que build de fonte no CI, e não pacotes: verifiquei que `MariaDB-devel`
+**não** inclui os headers de plugin de servidor (`plugin_audit.h` etc.) —
+eles só existem na árvore de fonte. Portanto não há atalho: compilar o
+plugin exige o fonte, como todo o setup Docker do projeto já assumia.
+
+Descobertas ao validar o caminho crítico (corrigidas):
+- O mtr do **12.3** passou a exigir módulos Perl que não vinham na imagem
+  OL8: `Memoize`, `Time::HiRes`, `JSON::PP` (+ Data-Dumper/Getopt/Env por
+  segurança). Adicionados ao Dockerfile.ol8.
+- `run-mtr.sh` agora exige `mariadbd` presente (o MTR precisa do servidor e
+  clientes locais, não só do .so) — falha cedo com mensagem clara se o build
+  for parcial.
+
+Prova de qualidade obtida: a **mesma** suíte MTR (mesmo .result) passa em
+11.4.4 e 12.3.2 — o comportamento observável do plugin é idêntico entre
+séries; só a ABI de compilação difere (D18).

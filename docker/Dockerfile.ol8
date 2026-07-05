@@ -48,6 +48,14 @@ RUN dnf -y install oracle-epel-release-el8 dnf-plugins-core && \
         which \
         diffutils \
         procps-ng \
+        perl-interpreter \
+        perl-Memoize \
+        perl-Time-HiRes \
+        perl-JSON-PP \
+        perl-Data-Dumper \
+        perl-Getopt-Long \
+        perl-Digest-MD5 \
+        perl-Env \
     && dnf clean all
 
 # gcc-toolset-12 na frente do PATH (dispensa `scl enable`)

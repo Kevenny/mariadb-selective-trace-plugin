@@ -1,5 +1,7 @@
 # MariaDB Selective Query Log Plugin
 
+[![CI](https://github.com/Kevenny/mariadb-selective-log-plugin/actions/workflows/ci.yml/badge.svg)](https://github.com/Kevenny/mariadb-selective-log-plugin/actions/workflows/ci.yml)
+
 Plugin nativo (open source, GPLv2) para **MariaDB 11.4 e 12.3+** que loga
 queries seletivamente **por schema**, **por tabela** (cross-schema) e **por
 tipo de comando**, como alternativa de baixo overhead ao `general_log`.

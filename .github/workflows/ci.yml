@@ -1,0 +1,103 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: '17 4 * * 1'      # weekly, catches upstream MariaDB drift
+  workflow_dispatch:
+
+# Cancel superseded runs on the same ref
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------
+  # Fast gate: pure filter-engine unit tests (no MariaDB, seconds).
+  # ---------------------------------------------------------------------
+  unit-tests:
+    name: Unit tests (filter_engine)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and run standalone unit tests
+        run: |
+          g++ -std=c++11 -Wall -Wextra -Werror -I src \
+              tests/test_filter_logic.cc src/filter_engine.cc \
+              -o test_filter_logic
+          ./test_filter_logic
+
+  # ---------------------------------------------------------------------
+  # Integration: build the plugin against the real MariaDB source for each
+  # series and run the MTR suite. Expensive (full server build), so it is
+  # gated to main/PRs/schedule and caches ccache across runs.
+  #
+  # Plugin headers (plugin_audit.h) ship only with the server source, not
+  # with MariaDB-devel — hence the source build. See docs/DECISIONS.md.
+  # ---------------------------------------------------------------------
+  integration:
+    name: Build + MTR (MariaDB ${{ matrix.series }})
+    runs-on: ubuntu-latest
+    needs: unit-tests
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - series: '11.4.4'
+            src_dir: /opt/mariadb-src
+            build_dir: /opt/mariadb-build
+          - series: '12.3.2'
+            src_dir: /opt/mariadb-src
+            build_dir: /opt/mariadb-build
+    env:
+      MARIADB_VERSION: ${{ matrix.series }}
+      MARIADB_SRC_DIR: ${{ matrix.src_dir }}
+      BUILD_DIR: ${{ matrix.build_dir }}
+      CCACHE_DIR: /opt/ccache
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build toolchain image (Oracle Linux 8 + gcc-toolset-12)
+        run: docker build -t sl-build -f docker/Dockerfile.ol8 .
+
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: ccache-${{ matrix.series }}
+          key: ccache-${{ matrix.series }}-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ matrix.series }}-
+
+      - name: Download MariaDB ${{ matrix.series }} source
+        run: |
+          mkdir -p ccache-${{ matrix.series }}
+          docker run --name sl --rm -d \
+            -v "$PWD:/workspace" \
+            -v "$PWD/ccache-${{ matrix.series }}:/opt/ccache" \
+            -e MARIADB_VERSION -e MARIADB_SRC_DIR -e BUILD_DIR -e CCACHE_DIR \
+            sl-build sleep infinity
+          docker exec -u root sl chown -R devuser:devuser \
+            "$MARIADB_SRC_DIR" "$BUILD_DIR" /opt/ccache || true
+          docker exec sl bash -lc './scripts/download-mariadb-source.sh'
+
+      - name: Build server + plugin
+        run: docker exec sl bash -lc './scripts/build.sh full'
+
+      - name: Run MTR integration suite
+        run: docker exec sl bash -lc './scripts/run-mtr.sh --force'
+
+      - name: Package plugin artifact
+        run: docker exec sl bash -lc './scripts/build.sh --package'
+
+      - name: Upload plugin .so
+        uses: actions/upload-artifact@v4
+        with:
+          name: selective_log-${{ matrix.series }}.so
+          path: build/plugin_output/selective_log.so
+          if-no-files-found: error
+
+      - name: Stop build container
+        if: always()
+        run: docker rm -f sl || true

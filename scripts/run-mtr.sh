@@ -23,7 +23,13 @@ echo ">> Instalando a suíte MTR em ${SUITE_DST}"
 rm -rf "${SUITE_DST}"
 cp -r "${SUITE_SRC}" "${SUITE_DST}"
 
-echo ">> Garantindo o plugin compilado"
+echo ">> Garantindo o servidor + plugin compilados"
+# O MTR precisa do mariadbd e dos clientes locais (mariadb-admin etc.), não
+# só do .so. Um build parcial (só o alvo do plugin) não basta.
+if [ ! -x "${BUILD_DIR}/sql/mariadbd" ]; then
+    echo "!! ${BUILD_DIR}/sql/mariadbd não existe — rode antes: ./scripts/build.sh full"
+    exit 1
+fi
 if [ ! -f "${BUILD_DIR}/plugin/selective_log/selective_log.so" ]; then
     (cd "${BUILD_DIR}" && ninja selective_log)
 fi
