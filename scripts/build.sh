@@ -61,7 +61,13 @@ build_full() {
     configure_cmake
     echo ">> Building the full MariaDB (this can take 20 to 60+ minutes)"
     cd "${BUILD_DIR}"
-    ninja -j"$(nproc)"
+    # BUILD_JOBS caps parallelism. Memory-constrained runners (e.g. GitHub
+    # Actions, 7 GB RAM) can OOM-kill the compiler when linking/compiling
+    # several large C++ objects at once with -j$(nproc); set BUILD_JOBS=2
+    # there. Defaults to all cores locally.
+    local jobs="${BUILD_JOBS:-$(nproc)}"
+    echo "   using -j${jobs}"
+    ninja -j"${jobs}"
     echo ">> Full build finished."
 }
 

@@ -56,6 +56,9 @@ jobs:
       MARIADB_SRC_DIR: ${{ matrix.src_dir }}
       BUILD_DIR: ${{ matrix.build_dir }}
       CCACHE_DIR: /opt/ccache
+      # GitHub runners have ~7 GB RAM; cap parallelism so the MariaDB C++
+      # build does not get OOM-killed.
+      BUILD_JOBS: '2'
     steps:
       - uses: actions/checkout@v5
 
@@ -77,6 +80,7 @@ jobs:
             -v "$PWD:/workspace" \
             -v "$PWD/ccache-${{ matrix.series }}:/opt/ccache" \
             -e MARIADB_VERSION -e MARIADB_SRC_DIR -e BUILD_DIR -e CCACHE_DIR \
+            -e BUILD_JOBS \
             sl-build sleep infinity
           # BUILD_DIR may not exist in the image (the Dockerfile only creates
           # the -ol8 variants) and devuser can't mkdir under /opt (root-owned),
