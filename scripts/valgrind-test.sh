@@ -79,6 +79,9 @@ SET GLOBAL selective_trace_schemas_to_log='vg_hot:insert|update,vg_cold:dml';
 SET GLOBAL selective_trace_tables_to_log='vg_cold.t:delete,logs.*:ddl';
 SET GLOBAL selective_trace_schemas_to_log='vg_hot';
 SET GLOBAL selective_trace_tables_to_log='';
+-- connection filter: parse/sort/dedupe of the id list, then clear
+SET GLOBAL selective_trace_connections_to_log='7,42,42,100,1';
+SET GLOBAL selective_trace_connections_to_log='';
 SET GLOBAL selective_trace_file_path='/tmp/vg_selective2.json';
 
 -- erro de SQL (evento com error_code)

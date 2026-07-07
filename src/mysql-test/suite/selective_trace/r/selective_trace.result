@@ -4,6 +4,7 @@ install plugin selective_trace soname 'selective_trace';
 #
 show variables like 'selective_trace%';
 Variable_name	Value
+selective_trace_connections_to_log	
 selective_trace_enabled	OFF
 selective_trace_file_path	selective_trace.json
 selective_trace_mask_passwords	ON
@@ -83,7 +84,25 @@ FOUND 1 /\*\*\*/ in sl_case6.json
 NOT FOUND /PlaintextSecret/ in sl_case6.json
 drop user sl_user@localhost;
 #
-# 7. Clean up
+# 7. Connection filter: a listed connection is traced in full,
+#    regardless of the (here empty) schema/table filters.
+#
+set global selective_trace_enabled= OFF;
+set global selective_trace_file_path= 'sl_case7.json';
+set global selective_trace_schemas_to_log= '';
+set global selective_trace_tables_to_log= '';
+set global selective_trace_connections_to_log= 'notanumber';
+ERROR 42000: selective_trace: invalid entry 'notanumber' in connections_to_log (expected a decimal connection id)
+set global selective_trace_enabled= ON;
+do sleep(0);
+select 1 + 1;
+1 + 1
+2
+FOUND 1 /"command":"DO"/ in sl_case7.json
+FOUND 1 /"command":"SELECT"/ in sl_case7.json
+set global selective_trace_connections_to_log= '';
+#
+# 8. Clean up
 #
 set global selective_trace_enabled= OFF;
 drop database sl_hot;

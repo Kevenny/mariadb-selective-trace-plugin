@@ -16,6 +16,7 @@
 #include "filter_engine.h"
 
 #include <cstring>
+#include <algorithm>
 
 namespace selective_trace {
 
@@ -270,6 +271,52 @@ bool parse_filter_lists(const char *schemas_csv, const char *tables_csv,
   out->wildcard_schemas.swap(rules.wildcard_schemas);
   out->tables.swap(rules.tables);
   return true;
+}
+
+bool parse_connection_list(const char *conns_csv, FilterRules *out,
+                           std::string *error)
+{
+  std::vector<std::string> raw;
+  split_csv(conns_csv, &raw);
+
+  std::vector<unsigned long long> ids;
+  for (size_t i= 0; i < raw.size(); i++)
+  {
+    const std::string &tok= raw[i];
+    /* decimal unsigned only — every char must be a digit */
+    if (tok.empty())
+      continue;
+    unsigned long long v= 0;
+    bool ok= true;
+    for (size_t k= 0; k < tok.size(); k++)
+    {
+      char c= tok[k];
+      if (c < '0' || c > '9')
+      {
+        ok= false;
+        break;
+      }
+      v= v * 10ULL + (unsigned long long) (c - '0');
+    }
+    if (!ok)
+    {
+      if (error)
+        *error= tok;
+      return false;
+    }
+    ids.push_back(v);
+  }
+
+  std::sort(ids.begin(), ids.end());
+  ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
+  out->connections.swap(ids);
+  return true;
+}
+
+bool match_connection(const FilterRules &rules, unsigned long long conn_id)
+{
+  return std::binary_search(rules.connections.begin(),
+                            rules.connections.end(), conn_id);
 }
 
 unsigned match_schema(const FilterRules &rules, const char *db, size_t db_len)

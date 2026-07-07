@@ -391,3 +391,27 @@ Known minor (not fixed): the status counters (`events_logged` etc.) are
 plain globals incremented without atomics, so under heavy concurrency the
 reported totals can slightly under-count. Diagnostic-only; never corrupts
 state. Would move to atomics if precise counts become a requirement.
+
+## D22. Per-connection tracing (v0.8.0): connections_to_log
+
+Trace requirement: capture everything a specific connection runs (a session
+spotted in SHOW PROCESSLIST), regardless of schema/table — the diagnostic
+counterpart of "general_log, but for one connection".
+
+- New sysvar `selective_trace_connections_to_log`: comma-separated decimal
+  connection ids. Parsed (in filter_engine, testable) into a sorted,
+  de-duplicated vector; matched with binary_search in the hot path.
+- Semantics (chosen with the user): a listed connection is traced **in
+  full** — the decision at GENERAL_STATUS sets `allowed = CMD_ALL` when
+  `match_connection(general_thread_id)` hits, so even table-less statements
+  (SET, SHOW, DO, SELECT 1) that would otherwise fall through the
+  schema/table filters are captured. It's effectively OR-ed with the other
+  filters. `min_duration_ms` still applies to everyone (consistency).
+- The connection id is the same `conn_id` already in the output and the
+  `general_thread_id`/`thread_id` of the audit events (= SHOW PROCESSLIST id).
+- Non-numeric tokens are rejected at SET time (ER_WRONG_VALUE_FOR_VAR).
+
+Validated: 6 new unit tests (138 total), an MTR case tracing the test's own
+connection (DO/SELECT captured with empty schema/table filters), a live test
+confirming a full connection is captured and that other connections are not,
+and Valgrind clean.

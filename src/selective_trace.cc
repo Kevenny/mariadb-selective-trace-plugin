@@ -36,8 +36,8 @@
   the hot path only takes read locks, so queries never serialize.
 */
 
-#define PLUGIN_VERSION      0x0009
-#define PLUGIN_STR_VERSION  "0.7.1"
+#define PLUGIN_VERSION      0x000A
+#define PLUGIN_STR_VERSION  "0.8.0"
 
 #include <my_global.h>
 #include <my_pthread.h>
@@ -68,6 +68,7 @@ static mysql_rwlock_t filter_lock;
 static FilterRules *active_rules= NULL;
 static std::string *schemas_storage= NULL;
 static std::string *tables_storage= NULL;
+static std::string *connections_storage= NULL;
 static std::string *file_path_storage= NULL;
 static int plugin_ready= 0;
 /* exceptions swallowed at the C boundaries (SHOW STATUS) */
@@ -154,6 +155,7 @@ static unsigned long long now_ns()
 static my_bool opt_enabled= FALSE;
 static char *opt_schemas_to_log= NULL;
 static char *opt_tables_to_log= NULL;
+static char *opt_connections_to_log= NULL;
 static ulong opt_output= 0;
 static char *opt_file_path= NULL;
 static uint opt_min_duration_ms= 0;
@@ -218,8 +220,38 @@ static int check_tables_to_log(MYSQL_THD thd, struct st_mysql_sys_var *var,
   return check_filter_list(thd, var, save, value, 1);
 }
 
+static int check_connections_to_log(MYSQL_THD thd __attribute__((unused)),
+                                    struct st_mysql_sys_var *var
+                                      __attribute__((unused)),
+                                    void *save, struct st_mysql_value *value)
+try
+{
+  int len= 0;
+  const char *str= value->val_str(value, NULL, &len);
+  FilterRules ignored;
+  std::string bad_token;
+
+  if (str != NULL &&
+      !selective_trace::parse_connection_list(str, &ignored, &bad_token))
+  {
+    my_printf_error(ER_WRONG_VALUE_FOR_VAR,
+                    "selective_trace: invalid entry '%s' in"
+                    " connections_to_log (expected a decimal connection id)",
+                    MYF(0), bad_token.c_str());
+    return 1;
+  }
+  *(const char **) save= str;
+  return 0;
+}
+catch (...)
+{
+  status_callback_errors++;
+  return 1;
+}
+
 static int rebuild_rules_locked(const char *schemas_csv,
-                                const char *tables_csv)
+                                const char *tables_csv,
+                                const char *conns_csv)
 {
   FilterRules *fresh= new (std::nothrow) FilterRules();
   if (fresh == NULL)
@@ -227,7 +259,8 @@ static int rebuild_rules_locked(const char *schemas_csv,
 
   std::string bad_token;
   if (!selective_trace::parse_filter_lists(schemas_csv, tables_csv,
-                                         fresh, &bad_token))
+                                         fresh, &bad_token) ||
+      !selective_trace::parse_connection_list(conns_csv, fresh, &bad_token))
   {
     /* Can't happen after check callbacks, but never swap in bad rules. */
     delete fresh;
@@ -240,8 +273,11 @@ static int rebuild_rules_locked(const char *schemas_csv,
   return 0;
 }
 
+/* which list a sysvar update targets */
+enum filter_kind { FK_SCHEMAS= 0, FK_TABLES= 1, FK_CONNECTIONS= 2 };
+
 static void update_filter_list(void *var_ptr, const void *save,
-                               int is_table_list)
+                               filter_kind kind)
 {
   const char *new_val= *(const char *const *) save;
   if (new_val == NULL)
@@ -252,12 +288,15 @@ static void update_filter_list(void *var_ptr, const void *save,
   /* the lock is C state: release it even if an allocation throws */
   try
   {
-    std::string *storage= is_table_list ? tables_storage : schemas_storage;
+    std::string *storage= kind == FK_TABLES      ? tables_storage :
+                          kind == FK_CONNECTIONS ? connections_storage :
+                                                   schemas_storage;
     storage->assign(new_val);
     *(char **) var_ptr= const_cast<char *>(storage->c_str());
 
     (void) rebuild_rules_locked(schemas_storage->c_str(),
-                                tables_storage->c_str());
+                                tables_storage->c_str(),
+                                connections_storage->c_str());
   }
   catch (...)
   {
@@ -272,7 +311,7 @@ static void update_schemas_to_log(MYSQL_THD thd __attribute__((unused)),
                                     __attribute__((unused)),
                                   void *var_ptr, const void *save)
 {
-  update_filter_list(var_ptr, save, 0);
+  update_filter_list(var_ptr, save, FK_SCHEMAS);
 }
 
 static void update_tables_to_log(MYSQL_THD thd __attribute__((unused)),
@@ -280,7 +319,15 @@ static void update_tables_to_log(MYSQL_THD thd __attribute__((unused)),
                                    __attribute__((unused)),
                                  void *var_ptr, const void *save)
 {
-  update_filter_list(var_ptr, save, 1);
+  update_filter_list(var_ptr, save, FK_TABLES);
+}
+
+static void update_connections_to_log(MYSQL_THD thd __attribute__((unused)),
+                                       struct st_mysql_sys_var *var
+                                         __attribute__((unused)),
+                                       void *var_ptr, const void *save)
+{
+  update_filter_list(var_ptr, save, FK_CONNECTIONS);
 }
 
 static void update_file_path(MYSQL_THD thd __attribute__((unused)),
@@ -327,6 +374,13 @@ static MYSQL_SYSVAR_STR(tables_to_log, opt_tables_to_log,
   " Empty means no table filter.",
   check_tables_to_log, update_tables_to_log, "");
 
+static MYSQL_SYSVAR_STR(connections_to_log, opt_connections_to_log,
+  PLUGIN_VAR_RQCMDARG,
+  "Comma separated list of connection ids (as in SHOW PROCESSLIST). Every"
+  " statement of a listed connection is traced in full, regardless of the"
+  " schema/table filters. Empty means no connection filter.",
+  check_connections_to_log, update_connections_to_log, "");
+
 static MYSQL_SYSVAR_ENUM(output, opt_output, PLUGIN_VAR_RQCMDARG,
   "Log destination. FILE writes one JSON object per line to"
   " selective_trace_file_path; TABLE inserts into the plugin log table.",
@@ -354,6 +408,7 @@ static struct st_mysql_sys_var *selective_trace_sysvars[]=
   MYSQL_SYSVAR(enabled),
   MYSQL_SYSVAR(schemas_to_log),
   MYSQL_SYSVAR(tables_to_log),
+  MYSQL_SYSVAR(connections_to_log),
   MYSQL_SYSVAR(output),
   MYSQL_SYSVAR(file_path),
   MYSQL_SYSVAR(min_duration_ms),
@@ -607,12 +662,19 @@ static void handle_status_event(MYSQL_THD thd,
 
   if (!(allowed & cmd_bit))
   {
-    /* fall back to the session-schema filter */
+    /* fall back to the session-schema and connection filters */
     mysql_rwlock_rdlock(&filter_lock);
     const FilterRules *rules= active_rules;
     if (rules)
-      allowed|= selective_trace::match_schema(*rules, event->database.str,
-                                            event->database.length);
+    {
+      /* a listed connection is traced in full (all commands) */
+      if (selective_trace::match_connection(*rules,
+                                            event->general_thread_id))
+        allowed= selective_trace::CMD_ALL;
+      else
+        allowed|= selective_trace::match_schema(*rules, event->database.str,
+                                              event->database.length);
+    }
     mysql_rwlock_unlock(&filter_lock);
   }
 
@@ -837,20 +899,24 @@ static int selective_trace_init(void *arg __attribute__((unused)))
       opt_schemas_to_log ? opt_schemas_to_log : "");
   tables_storage= new (std::nothrow) std::string(
       opt_tables_to_log ? opt_tables_to_log : "");
+  connections_storage= new (std::nothrow) std::string(
+      opt_connections_to_log ? opt_connections_to_log : "");
   file_path_storage= new (std::nothrow) std::string(
       opt_file_path ? opt_file_path : "");
   if (schemas_storage == NULL || tables_storage == NULL ||
-      file_path_storage == NULL)
+      connections_storage == NULL || file_path_storage == NULL)
     goto fail;
 
   /* Point the sysvars at our storage from the start, so the update
      callbacks and SHOW VARIABLES always deal with the same memory. */
   opt_schemas_to_log= const_cast<char *>(schemas_storage->c_str());
   opt_tables_to_log= const_cast<char *>(tables_storage->c_str());
+  opt_connections_to_log= const_cast<char *>(connections_storage->c_str());
   opt_file_path= const_cast<char *>(file_path_storage->c_str());
 
   if (rebuild_rules_locked(schemas_storage->c_str(),
-                           tables_storage->c_str()))
+                           tables_storage->c_str(),
+                           connections_storage->c_str()))
     goto fail;
 
   plugin_ready= 1;
@@ -860,8 +926,9 @@ static int selective_trace_init(void *arg __attribute__((unused)))
 fail:
   delete schemas_storage;
   delete tables_storage;
+  delete connections_storage;
   delete file_path_storage;
-  schemas_storage= tables_storage= file_path_storage= NULL;
+  schemas_storage= tables_storage= connections_storage= file_path_storage= NULL;
   selective_trace::table_writer_shutdown();
   selective_trace::file_writer_deinit();
   mysql_rwlock_destroy(&filter_lock);
@@ -881,8 +948,9 @@ static int selective_trace_deinit(void *arg __attribute__((unused)))
   active_rules= NULL;
   delete schemas_storage;
   delete tables_storage;
+  delete connections_storage;
   delete file_path_storage;
-  schemas_storage= tables_storage= file_path_storage= NULL;
+  schemas_storage= tables_storage= connections_storage= file_path_storage= NULL;
 
   mysql_rwlock_destroy(&filter_lock);
   fprintf(stderr, "selective_trace: plugin stopped\n");

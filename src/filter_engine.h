@@ -74,10 +74,15 @@ struct FilterRules
   std::vector<FilterEntry> wildcard_schemas;
   /* From selective_trace_tables_to_log: lowercase "schema.table". */
   std::vector<FilterEntry> tables;
+  /* From selective_trace_connections_to_log: connection ids, sorted. A
+     listed connection is traced in full (all its statements), regardless
+     of the schema/table filters. */
+  std::vector<unsigned long long> connections;
 
   bool empty() const
   {
-    return schemas.empty() && wildcard_schemas.empty() && tables.empty();
+    return schemas.empty() && wildcard_schemas.empty() &&
+           tables.empty() && connections.empty();
   }
 };
 
@@ -103,6 +108,18 @@ struct FilterRules
 */
 bool parse_filter_lists(const char *schemas_csv, const char *tables_csv,
                         FilterRules *out, std::string *error);
+
+/*
+  Parse a comma-separated list of connection ids (decimal, unsigned) into
+  out->connections (sorted, de-duplicated). Empty/NULL means no connection
+  filter. On an invalid token returns false and stores it in *error
+  (out->connections is left untouched).
+*/
+bool parse_connection_list(const char *conns_csv, FilterRules *out,
+                           std::string *error);
+
+/* True if conn_id is in the connection filter. */
+bool match_connection(const FilterRules &rules, unsigned long long conn_id);
 
 /*
   Union of the command masks of every schema-filter entry matching db

@@ -99,6 +99,7 @@ All dynamic (`SET GLOBAL`), no restart needed:
 | `selective_trace_enabled` | BOOL | `OFF` | Enable/disable capture |
 | `selective_trace_schemas_to_log` | VARCHAR | `''` | Comma-separated list of schemas |
 | `selective_trace_tables_to_log` | VARCHAR | `''` | Comma-separated `schema.table` list (cross-schema); `schema.*` = the whole schema |
+| `selective_trace_connections_to_log` | VARCHAR | `''` | Comma-separated connection ids (as in `SHOW PROCESSLIST`). Every statement of a listed connection is traced in full, regardless of the schema/table filters |
 | `selective_trace_output` | ENUM | `FILE` | `FILE` (one JSON line) or `TABLE` (`mysql.selective_trace_events`) |
 | `selective_trace_file_path` | VARCHAR | `selective_trace.json` | Log file in FILE mode (relative = datadir) |
 | `selective_trace_min_duration_ms` | INT | `0` | Log only queries slower than N ms (0 = all) |
@@ -139,7 +140,14 @@ cannot be classified fall under `other`.
   carries all touched tables).
 - Matching is **case-insensitive** (ASCII); optional backticks are accepted.
 - Statements that touch no table (`SET`, `SHOW`, `SELECT 1`) are logged only
-  if the session's current schema (`USE ...`) matches the schema filter.
+  if the session's current schema (`USE ...`) matches the schema filter — or
+  if the connection is in `connections_to_log` (see below).
+- **Trace a whole connection**: put its id in
+  `selective_trace_connections_to_log` and *every* statement of that
+  connection is traced (all commands, tables or not), regardless of the
+  schema/table filters. Ideal for diagnosing one problematic session spotted
+  in `SHOW PROCESSLIST`. `min_duration_ms` still applies (fast queries are
+  still filtered out).
 - Invalid values are rejected at `SET GLOBAL` time:
 
 ```
@@ -165,6 +173,11 @@ SET GLOBAL selective_trace_tables_to_log = 'logs.*,app.orders';
 -- Only slow queries (>250ms) of the app schema
 SET GLOBAL selective_trace_schemas_to_log = 'app';
 SET GLOBAL selective_trace_min_duration_ms = 250;
+
+-- Trace EVERYTHING from connections 4711 and 4720 (spotted in the
+-- processlist), regardless of schema/table
+SET GLOBAL selective_trace_connections_to_log = '4711,4720';
+SET GLOBAL selective_trace_enabled = ON;
 ```
 
 ## 3. FILE mode (default)

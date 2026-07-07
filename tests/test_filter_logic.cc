@@ -306,6 +306,49 @@ static void test_mask_secrets()
         "INSERT INTO t VALUES (0xCAFE, 'x')");
 }
 
+static void test_connection_filter()
+{
+  using namespace selective_trace;
+  FilterRules r;
+  std::string err;
+
+  /* empty = no connections */
+  CHECK(parse_connection_list("", &r, &err));
+  CHECK(r.connections.empty());
+  CHECK(parse_connection_list(NULL, &r, &err));
+  CHECK(r.connections.empty());
+
+  /* parse, sort, dedupe */
+  CHECK(parse_connection_list("42, 7, 42, 100 , 7", &r, &err));
+  CHECK(r.connections.size() == 3);       /* 7, 42, 100 */
+  CHECK(match_connection(r, 7));
+  CHECK(match_connection(r, 42));
+  CHECK(match_connection(r, 100));
+  CHECK(!match_connection(r, 8));
+  CHECK(!match_connection(r, 0));
+
+  /* large id (64-bit) */
+  CHECK(parse_connection_list("18446744073709551615", &r, &err));
+  CHECK(match_connection(r, 18446744073709551615ULL));
+
+  /* empty tokens between commas are ignored */
+  CHECK(parse_connection_list("1,,2,", &r, &err));
+  CHECK(r.connections.size() == 2);
+
+  /* invalid tokens rejected with the offending token */
+  CHECK(!parse_connection_list("42,abc", &r, &err));
+  CHECK(err == "abc");
+  CHECK(!parse_connection_list("-1", &r, &err));   /* '-' is not a digit */
+  CHECK(!parse_connection_list("4 2", &r, &err));  /* embedded space */
+
+  /* connections make FilterRules non-empty (fail-safe interplay) */
+  FilterRules r2;
+  CHECK(parse_filter_lists("", "", &r2, &err));
+  CHECK(r2.empty());
+  CHECK(parse_connection_list("5", &r2, &err));
+  CHECK(!r2.empty());
+}
+
 static void test_match_null_safety()
 {
   FilterRules r;
@@ -327,6 +370,7 @@ int main()
   test_command_qualifiers();
   test_extract_command();
   test_mask_secrets();
+  test_connection_filter();
   test_match_null_safety();
 
   if (failures)

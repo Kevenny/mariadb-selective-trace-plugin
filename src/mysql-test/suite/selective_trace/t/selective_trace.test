@@ -121,7 +121,39 @@ let SEARCH_PATTERN= PlaintextSecret;
 drop user sl_user@localhost;
 
 --echo #
---echo # 7. Clean up
+--echo # 7. Connection filter: a listed connection is traced in full,
+--echo #    regardless of the (here empty) schema/table filters.
+--echo #
+set global selective_trace_enabled= OFF;
+set global selective_trace_file_path= 'sl_case7.json';
+set global selective_trace_schemas_to_log= '';
+set global selective_trace_tables_to_log= '';
+# an invalid (non-numeric) id is rejected
+--error ER_WRONG_VALUE_FOR_VAR
+set global selective_trace_connections_to_log= 'notanumber';
+# trace this very connection in full (STR sysvars take a literal, so grab
+# the id into an mtr variable and interpolate it; hide the query so the
+# result stays stable across runs since the id varies)
+let $cid= `SELECT CONNECTION_ID()`;
+--disable_query_log
+eval set global selective_trace_connections_to_log= '$cid';
+--enable_query_log
+set global selective_trace_enabled= ON;
+
+# statements that touch no table and match no schema — logged anyway
+do sleep(0);
+select 1 + 1;
+
+let SEARCH_FILE= $MYSQLD_DATADIR/sl_case7.json;
+let SEARCH_PATTERN= "command":"DO";
+--source include/search_pattern_in_file.inc
+let SEARCH_PATTERN= "command":"SELECT";
+--source include/search_pattern_in_file.inc
+
+set global selective_trace_connections_to_log= '';
+
+--echo #
+--echo # 8. Clean up
 --echo #
 set global selective_trace_enabled= OFF;
 drop database sl_hot;
@@ -129,4 +161,5 @@ drop database sl_cold;
 --remove_file $MYSQLD_DATADIR/sl_case3.json
 --remove_file $MYSQLD_DATADIR/sl_case4.json
 --remove_file $MYSQLD_DATADIR/sl_case6.json
+--remove_file $MYSQLD_DATADIR/sl_case7.json
 uninstall plugin selective_trace;
