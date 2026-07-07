@@ -59,14 +59,22 @@ static PSI_rwlock_info log_rwlock_list[]=
 #define key_rwlock_logfile 0
 #endif
 
-void file_writer_init()
+/* Register our rwlock with the performance schema, when it is available. */
+static void register_psi_rwlock()
 {
-  logger_init_mutexes();
 #ifdef HAVE_PSI_INTERFACE
-  if (PSI_server)
+  if (PSI_server != NULL)
     PSI_server->register_rwlock("selective_trace", log_rwlock_list, 1);
 #endif
+}
+
+void file_writer_init()
+{
+  register_psi_rwlock();
   mysql_rwlock_init(key_rwlock_logfile, &log_lock);
+  /* The logger service keeps its own mutex; make sure it is initialized
+     before the first logger_open() call from a query thread. */
+  logger_init_mutexes();
 }
 
 void file_writer_deinit()

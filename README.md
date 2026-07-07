@@ -29,6 +29,9 @@ millisecond duration, benchmark and Valgrind. Measured overhead: **~0%**
 > 🔒 Threat model, adversarial test battery and SELinux/OL9 hardening:
 > [`docs/SECURITY.md`](./docs/SECURITY.md)
 >
+> 📜 Code provenance & originality (not a copy of any bundled plugin):
+> [`docs/ORIGINALITY.md`](./docs/ORIGINALITY.md)
+>
 > 📋 Original specification used with Claude Code (Portuguese, historical):
 > [`CLAUDE.md`](./CLAUDE.md)
 

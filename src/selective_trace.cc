@@ -468,12 +468,26 @@ static struct st_mysql_show_var selective_trace_status[]=
    Event capture
    ------------------------------------------------------------------------ */
 
+/*
+  The GENERAL_STATUS event fires for every command; we only want the ones
+  that carry actual SQL text (a directly issued statement or a prepared-
+  statement execution). Match the command label against that small set.
+*/
 static bool is_query_command(const struct mysql_event_general *event)
 {
-  return (event->general_command_length == 5 &&
-          strncmp(event->general_command, "Query", 5) == 0) ||
-         (event->general_command_length == 7 &&
-          strncmp(event->general_command, "Execute", 7) == 0);
+  static const struct { const char *label; unsigned int len; } sql_cmds[]=
+  {
+    { "Query",   5 },
+    { "Execute", 7 }
+  };
+  const char *cmd= event->general_command;
+  unsigned int cmd_len= event->general_command_length;
+
+  for (size_t i= 0; i < array_elements(sql_cmds); i++)
+    if (cmd_len == sql_cmds[i].len &&
+        memcmp(cmd, sql_cmds[i].label, cmd_len) == 0)
+      return true;
+  return false;
 }
 
 /*
@@ -885,12 +899,18 @@ static void selective_trace_notify(MYSQL_THD thd,
    init / deinit
    ------------------------------------------------------------------------ */
 
-static int selective_trace_init(void *arg __attribute__((unused)))
+/* Register the filter rwlock with the performance schema, if present. */
+static void register_filter_psi()
 {
 #ifdef HAVE_PSI_INTERFACE
-  if (PSI_server)
+  if (PSI_server != NULL)
     PSI_server->register_rwlock("selective_trace", rwlock_key_list, 1);
 #endif
+}
+
+static int selective_trace_init(void *arg __attribute__((unused)))
+{
+  register_filter_psi();
   mysql_rwlock_init(key_rwlock_filter, &filter_lock);
   selective_trace::file_writer_init();
   selective_trace::table_writer_init();
