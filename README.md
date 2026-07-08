@@ -31,9 +31,6 @@ millisecond duration, benchmark and Valgrind. Measured overhead: **~0%**
 >
 > 📜 Code provenance & originality (not a copy of any bundled plugin):
 > [`docs/ORIGINALITY.md`](./docs/ORIGINALITY.md)
->
-> 📋 Original specification used with Claude Code (Portuguese, historical):
-> [`CLAUDE.md`](./CLAUDE.md)
 
 ## Usage TL;DR
 

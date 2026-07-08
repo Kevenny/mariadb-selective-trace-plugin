@@ -25,3 +25,9 @@ docker/mysql-data/
 
 # Env
 .env
+
+# Briefing interno de desenvolvimento (não vai para o repo público)
+CLAUDE.md
+
+# Estado local do Claude Code
+.claude/
