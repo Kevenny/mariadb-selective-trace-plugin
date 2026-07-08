@@ -62,6 +62,14 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - name: Free up runner disk space
+        run: |
+          # The MariaDB source + build tree + toolchain image can crowd the
+          # runner's ~14 GB. Remove big preinstalled toolchains we don't use.
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+            /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" || true
+          df -h /
+
       - name: Build toolchain image (Oracle Linux 8 + gcc-toolset-12)
         run: docker build -t sl-build -f docker/Dockerfile.ol8 .
 
@@ -92,8 +100,34 @@ jobs:
              chown -R devuser:devuser "$MARIADB_SRC_DIR" "$BUILD_DIR" /opt/ccache'
           docker exec sl bash -lc 'bash scripts/download-mariadb-source.sh'
 
+      - name: Show resources before build
+        run: |
+          echo "=== memory ==="; free -h
+          echo "=== disk ===";   df -h /
+          echo "=== cpus ===";   nproc
+
       - name: Build server + plugin
-        run: docker exec sl bash -lc 'bash scripts/build.sh full'
+        run: |
+          # capture the build log and keep going so we can inspect on failure
+          set -o pipefail
+          docker exec sl bash -lc 'bash scripts/build.sh full' 2>&1 | tee build.log
+
+      - name: Resources after build (always)
+        if: always()
+        run: |
+          echo "=== memory ==="; free -h
+          echo "=== disk ===";   df -h /
+          echo "=== kernel OOM kills? ===";
+          dmesg 2>/dev/null | grep -i "killed process\|out of memory" | tail -5 || \
+            echo "(dmesg unavailable)"
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log-${{ matrix.series }}
+          path: build.log
+          if-no-files-found: ignore
 
       - name: Run MTR integration suite
         run: docker exec sl bash -lc 'bash scripts/run-mtr.sh --force'
