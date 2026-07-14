@@ -40,24 +40,31 @@ namespace selective_trace {
 */
 enum CommandBits : unsigned
 {
-  CMD_SELECT   = 1u << 0,
-  CMD_INSERT   = 1u << 1,
-  CMD_UPDATE   = 1u << 2,
-  CMD_DELETE   = 1u << 3,
-  CMD_REPLACE  = 1u << 4,
-  CMD_LOAD     = 1u << 5,
-  CMD_CALL     = 1u << 6,
-  CMD_CREATE   = 1u << 7,
-  CMD_ALTER    = 1u << 8,
-  CMD_DROP     = 1u << 9,
-  CMD_TRUNCATE = 1u << 10,
-  CMD_RENAME   = 1u << 11,
-  CMD_OTHER    = 1u << 12,
-  CMD_DML      = CMD_INSERT | CMD_UPDATE | CMD_DELETE | CMD_REPLACE |
-                 CMD_LOAD,
-  CMD_DDL      = CMD_CREATE | CMD_ALTER | CMD_DROP | CMD_TRUNCATE |
-                 CMD_RENAME,
-  CMD_ALL      = 0xFFFFFFFFu
+  CMD_SELECT    = 1u << 0,
+  CMD_INSERT    = 1u << 1,
+  CMD_UPDATE    = 1u << 2,
+  CMD_DELETE    = 1u << 3,
+  CMD_REPLACE   = 1u << 4,
+  CMD_LOAD      = 1u << 5,
+  CMD_CALL      = 1u << 6,
+  CMD_CREATE    = 1u << 7,
+  CMD_ALTER     = 1u << 8,
+  CMD_DROP      = 1u << 9,
+  CMD_TRUNCATE  = 1u << 10,
+  CMD_RENAME    = 1u << 11,
+  CMD_OTHER     = 1u << 12,
+  /* transaction control (only explicit statements are visible to the
+     plugin — autocommit does not emit a COMMIT command; see USAGE) */
+  CMD_COMMIT    = 1u << 13,
+  CMD_ROLLBACK  = 1u << 14,
+  CMD_BEGIN     = 1u << 15,
+  CMD_SAVEPOINT = 1u << 16,
+  CMD_DML       = CMD_INSERT | CMD_UPDATE | CMD_DELETE | CMD_REPLACE |
+                  CMD_LOAD,
+  CMD_DDL       = CMD_CREATE | CMD_ALTER | CMD_DROP | CMD_TRUNCATE |
+                  CMD_RENAME,
+  CMD_TCL       = CMD_COMMIT | CMD_ROLLBACK | CMD_BEGIN | CMD_SAVEPOINT,
+  CMD_ALL       = 0xFFFFFFFFu
 };
 
 struct FilterEntry

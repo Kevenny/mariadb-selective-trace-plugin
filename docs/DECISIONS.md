@@ -415,3 +415,25 @@ Validated: 6 new unit tests (138 total), an MTR case tracing the test's own
 connection (DO/SELECT captured with empty schema/table filters), a live test
 confirming a full connection is captured and that other connections are not,
 and Valgrind clean.
+
+## D23. Transaction-control commands in the command filter (v0.9.0)
+
+Requirement: trace by transaction commands (e.g. only COMMIT, to count
+commits per hour). Added CMD_COMMIT/ROLLBACK/BEGIN/SAVEPOINT to CommandBits,
+the `tcl` group, and the keyword map (BEGIN and START both open a
+transaction). New qualifier tokens: commit, rollback, begin, savepoint, tcl.
+
+Empirically verified against the audit API first (before coding): an
+explicit `COMMIT`/`ROLLBACK`/`START TRANSACTION` DOES reach the plugin as a
+GENERAL_STATUS command and is classified by extract_command — so filtering
+`schema:commit` works and captures exactly the explicit commits.
+
+Documented limitation (also verified): with autocommit=1 (the default) the
+server commits each statement automatically and emits NO separate COMMIT
+command — the audit API just sees the INSERT/UPDATE/DELETE. So `:commit`
+counts only explicit COMMIT statements; to count all durable writes, use
+`:dml`. This is an audit-API limitation, not fixable in the plugin.
+
+Validated: 5 new unit tests (149 total), MTR green, and a live test where
+`app:commit` collected exactly the 3 explicit commits out of a mix of
+INSERT/SELECT/ROLLBACK/COMMIT.

@@ -119,15 +119,32 @@ SET GLOBAL selective_trace_tables_to_log = 'app.orders:delete, logs.*:dml';
 ```
 
 Valid tokens: `select`, `insert`, `update`, `delete`, `replace`, `load`,
-`call`, `create`, `alter`, `drop`, `truncate`, `rename`, `other`, and the
-groups `dml` (insert|update|delete|replace|load), `ddl`
-(create|alter|drop|truncate|rename) and `all`. No qualifier = all commands.
+`call`, `create`, `alter`, `drop`, `truncate`, `rename`, `other`, the
+transaction-control commands `commit`, `rollback`, `begin`, `savepoint`, and
+the groups `dml` (insert|update|delete|replace|load), `ddl`
+(create|alter|drop|truncate|rename), `tcl`
+(commit|rollback|begin|savepoint) and `all`. No qualifier = all commands.
 An unknown token makes the `SET GLOBAL` fail. Duplicate entries have their
 masks merged (`a:insert, a:update` ≡ `a:insert|update`).
 
 The statement's command is the same as the `command` field (first SQL
-keyword, ignoring comments); `WITH` (CTE) counts as `select`. Statements that
-cannot be classified fall under `other`.
+keyword, ignoring comments); `WITH` (CTE) counts as `select`, and `START`
+(TRANSACTION) counts as `begin`. Statements that cannot be classified fall
+under `other`.
+
+> **Counting commits — read this first.** You can trace only commits with a
+> filter like `myschema:commit` and then count them:
+> ```sql
+> SELECT COUNT(*) FROM mysql.selective_trace_events
+> WHERE command = 'COMMIT' AND ts >= NOW() - INTERVAL 1 HOUR;
+> ```
+> **Caveat**: only **explicit** `COMMIT` statements are visible to the plugin.
+> With `autocommit=1` (the default), each statement commits automatically and
+> the server does **not** emit a separate COMMIT command — so autocommitted
+> writes are counted as their `INSERT`/`UPDATE`/`DELETE`, not as commits.
+> This is a limitation of the MariaDB audit API, not the plugin. To count
+> *all* durable changes, filter `myschema:dml` instead; to count explicit
+> transaction boundaries, use `:commit`.
 
 ### Filter semantics
 
@@ -178,6 +195,15 @@ SET GLOBAL selective_trace_min_duration_ms = 250;
 -- processlist), regardless of schema/table
 SET GLOBAL selective_trace_connections_to_log = '4711,4720';
 SET GLOBAL selective_trace_enabled = ON;
+
+-- Count explicit commits per hour on the app schema (see the caveat above
+-- about autocommit)
+SET GLOBAL selective_trace_schemas_to_log = 'app:commit';
+SET GLOBAL selective_trace_output = 'TABLE';
+SET GLOBAL selective_trace_enabled = ON;
+-- then:
+--   SELECT COUNT(*) FROM mysql.selective_trace_events
+--   WHERE command='COMMIT' AND ts >= NOW() - INTERVAL 1 HOUR;
 ```
 
 ## 3. FILE mode (default)

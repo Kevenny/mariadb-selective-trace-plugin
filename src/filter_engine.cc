@@ -99,8 +99,11 @@ static bool parse_cmd_qualifier(const std::string &quals, unsigned *cmds)
     { "call",     CMD_CALL },     { "create", CMD_CREATE },
     { "alter",    CMD_ALTER },    { "drop",   CMD_DROP },
     { "truncate", CMD_TRUNCATE }, { "rename", CMD_RENAME },
-    { "other",    CMD_OTHER },    { "dml",    CMD_DML },
-    { "ddl",      CMD_DDL },      { "all",    CMD_ALL }
+    { "other",    CMD_OTHER },
+    { "commit",   CMD_COMMIT },   { "rollback", CMD_ROLLBACK },
+    { "begin",    CMD_BEGIN },    { "savepoint", CMD_SAVEPOINT },
+    { "dml",      CMD_DML },      { "ddl",    CMD_DDL },
+    { "tcl",      CMD_TCL },      { "all",    CMD_ALL }
   };
 
   *cmds= 0;
@@ -358,7 +361,11 @@ unsigned command_bit(const char *cmd)
     { "LOAD",     CMD_LOAD },     { "CALL",    CMD_CALL },
     { "CREATE",   CMD_CREATE },   { "ALTER",   CMD_ALTER },
     { "DROP",     CMD_DROP },     { "TRUNCATE", CMD_TRUNCATE },
-    { "RENAME",   CMD_RENAME }
+    { "RENAME",   CMD_RENAME },
+    /* transaction control: BEGIN and START (TRANSACTION) both open one */
+    { "COMMIT",   CMD_COMMIT },   { "ROLLBACK", CMD_ROLLBACK },
+    { "BEGIN",    CMD_BEGIN },    { "START",   CMD_BEGIN },
+    { "SAVEPOINT", CMD_SAVEPOINT }
   };
   for (size_t i= 0; i < sizeof(keywords) / sizeof(keywords[0]); i++)
     if (strcmp(cmd, keywords[i].kw) == 0)

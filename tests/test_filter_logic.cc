@@ -206,6 +206,24 @@ static void test_command_qualifiers()
   CHECK(command_bit("WITH") == CMD_SELECT);        /* CTE ~ SELECT */
   CHECK(command_bit("GRANT") == CMD_OTHER);
   CHECK(command_bit("OTHER") == CMD_OTHER);
+
+  /* transaction-control commands */
+  CHECK(command_bit("COMMIT") == CMD_COMMIT);
+  CHECK(command_bit("ROLLBACK") == CMD_ROLLBACK);
+  CHECK(command_bit("BEGIN") == CMD_BEGIN);
+  CHECK(command_bit("START") == CMD_BEGIN);         /* START TRANSACTION */
+  CHECK(command_bit("SAVEPOINT") == CMD_SAVEPOINT);
+
+  /* filter only commits of a schema */
+  CHECK(parse_filter_lists("app:commit", "", &r, &err));
+  CHECK(match_schema(r, "app", 3) == CMD_COMMIT);
+  /* tcl group covers all transaction control */
+  CHECK(parse_filter_lists("app:tcl", "", &r, &err));
+  CHECK(match_schema(r, "app", 3) ==
+        (CMD_COMMIT | CMD_ROLLBACK | CMD_BEGIN | CMD_SAVEPOINT));
+  /* commit + rollback together */
+  CHECK(parse_filter_lists("app:commit|rollback", "", &r, &err));
+  CHECK(match_schema(r, "app", 3) == (CMD_COMMIT | CMD_ROLLBACK));
 }
 
 static std::string cmd(const char *q)
