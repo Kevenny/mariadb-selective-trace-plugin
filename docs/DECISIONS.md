@@ -437,3 +437,23 @@ counts only explicit COMMIT statements; to count all durable writes, use
 Validated: 5 new unit tests (149 total), MTR green, and a live test where
 `app:commit` collected exactly the 3 explicit commits out of a mix of
 INSERT/SELECT/ROLLBACK/COMMIT.
+
+## D23. Maturity STABLE (v1.0.0): install without the plugin-maturity flag
+
+The plugin declared EXPERIMENTAL, so a default server (plugin-maturity floor
+= gamma) refused to load it unless the admin lowered the floor with
+plugin-maturity=experimental — friction at install time. Bumped the declared
+maturity to MariaDB_PLUGIN_MATURITY_STABLE, which is >= any floor, so
+INSTALL PLUGIN (and plugin-load-add) works on any server with no flag and no
+restart.
+
+The maturity label is the author's self-assessment, and STABLE is defensible
+here: 138 standalone unit tests, the MTR integration suite, Valgrind with
+zero plugin leaks, a 7/7 adversarial security battery, production-profile
+benchmarks, and validation on two server series (11.4.x and 12.3.x) across
+Ubuntu/OL8/OL9. Reflected as version 1.0.0.
+
+Removed --plugin-maturity=experimental from test-my.cnf and from the
+validate/security/valgrind scripts, so those now exercise the real default
+(no flag). SECURITY.md keeps the operational advice to review/pilot before
+enabling in production.

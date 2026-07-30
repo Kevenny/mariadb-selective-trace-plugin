@@ -1,7 +1,6 @@
 [mysqld]
-# O plugin declara maturity EXPERIMENTAL; o default do servidor (gamma)
-# bloquearia o load. Ambiente de teste, então liberamos.
-plugin-maturity=experimental
+# O plugin declara maturity STABLE (>= qualquer piso), então carrega sem
+# precisar baixar plugin-maturity.
 plugin-load-add=selective_trace.so
 
 # Configuração inicial do plugin selective_trace (ver docs/ARCHITECTURE.md)

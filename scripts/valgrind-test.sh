@@ -38,7 +38,6 @@ valgrind --tool=memcheck --leak-check=full \
     --datadir="$DATADIR" --socket="$SOCK" --skip-networking \
     --plugin-dir="$BUILD_DIR/plugin/selective_trace" \
     --plugin-load-add=selective_trace.so \
-    --plugin-maturity=experimental \
     --loose-innodb-buffer-pool-size=64M \
     >/tmp/vg_mysqld_stderr.log 2>&1 &
 VGPID=$!

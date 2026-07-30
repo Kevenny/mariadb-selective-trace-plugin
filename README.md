@@ -104,8 +104,8 @@ docker compose -f docker/docker-compose.yml exec mariadb-test \
 ```
 
 `docker/test-my.cnf` already loads the plugin
-(`plugin-load-add=selective_trace.so` + `plugin-maturity=experimental`) with
-the initial filter `selective_trace_schemas_to_log=testdb`.
+(`plugin-load-add=selective_trace.so`) with the initial filter
+`selective_trace_schemas_to_log=testdb`.
 
 ### 5. Benchmark and Valgrind
 

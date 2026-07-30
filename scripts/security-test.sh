@@ -23,7 +23,6 @@ ls -Z /usr/lib64/mysql/plugin/selective_trace.so 2>/dev/null || \
   ls -l /usr/lib64/mysql/plugin/selective_trace.so
 
 /usr/sbin/mariadbd --user=mysql --skip-networking --socket=/tmp/m.sock \
-    --plugin-load-add=selective_trace.so --plugin-maturity=experimental \
     --selective_trace_enabled=ON \
     --selective_trace_schemas_to_log=app \
     --selective_trace_file_path=/var/lib/mysql/sec.json \

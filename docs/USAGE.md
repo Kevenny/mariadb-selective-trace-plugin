@@ -71,14 +71,14 @@ Copy `selective_trace.so` to the server's `plugin_dir` (check it with
 INSTALL PLUGIN selective_trace SONAME 'selective_trace.so';
 ```
 
+The plugin declares **STABLE** maturity, so it loads on any server without
+touching `plugin-maturity`. No restart, no flags.
+
 Or via configuration (loads at startup):
 
 ```ini
 [mysqld]
 plugin-load-add=selective_trace.so
-# the plugin declares "experimental" maturity; allow it if the server uses
-# the default (gamma):
-plugin-maturity=experimental
 ```
 
 To remove it:

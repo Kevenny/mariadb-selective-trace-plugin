@@ -142,9 +142,10 @@ a controlled environment.
   `write_failures` (path/SELinux/disk), `events_dropped` (full TABLE queue),
   `callback_errors` (memory pressure).
 - **Kill switch**: `SET GLOBAL selective_trace_enabled=OFF` at runtime.
-- **EXPERIMENTAL maturity**: the server refuses to load it by default;
-  whoever installs it opts in consciously with
-  `plugin-maturity=experimental`.
+- **Vetting before enabling**: the plugin declares STABLE maturity so it
+  installs without lowering `plugin-maturity`. Review it and pilot it on a
+  non-production instance before enabling in production, as with any plugin
+  that observes query text.
 
 ## Reporting vulnerabilities
 

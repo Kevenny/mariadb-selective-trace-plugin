@@ -36,8 +36,8 @@
   the hot path only takes read locks, so queries never serialize.
 */
 
-#define PLUGIN_VERSION      0x000B
-#define PLUGIN_STR_VERSION  "0.9.0"
+#define PLUGIN_VERSION      0x0100
+#define PLUGIN_STR_VERSION  "1.0.0"
 
 #include <my_global.h>
 #include <my_pthread.h>
@@ -1003,6 +1003,6 @@ maria_declare_plugin(selective_trace)
   selective_trace_status,
   selective_trace_sysvars,
   PLUGIN_STR_VERSION,
-  MariaDB_PLUGIN_MATURITY_EXPERIMENTAL
+  MariaDB_PLUGIN_MATURITY_STABLE
 }
 maria_declare_plugin_end;

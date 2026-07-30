@@ -24,7 +24,6 @@ echo ">> [3/4] Starting mariadbd with the plugin"
 /usr/sbin/mariadbd --user=mysql --skip-networking \
     --socket=/tmp/m.sock \
     --plugin-load-add=selective_trace.so \
-    --plugin-maturity=experimental \
     --selective_trace_enabled=ON \
     --selective_trace_schemas_to_log=hotdb \
     --selective_trace_file_path=/tmp/selective_trace.json \
