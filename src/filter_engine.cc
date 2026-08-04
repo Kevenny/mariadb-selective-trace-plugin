@@ -362,10 +362,11 @@ unsigned command_bit(const char *cmd)
     { "CREATE",   CMD_CREATE },   { "ALTER",   CMD_ALTER },
     { "DROP",     CMD_DROP },     { "TRUNCATE", CMD_TRUNCATE },
     { "RENAME",   CMD_RENAME },
-    /* transaction control: BEGIN and START (TRANSACTION) both open one */
+    /* transaction control. START alone is NOT here: only START TRANSACTION
+       opens a transaction, and extract_command canonicalizes that to BEGIN;
+       bare START (START SLAVE/REPLICA/...) must fall through to CMD_OTHER. */
     { "COMMIT",   CMD_COMMIT },   { "ROLLBACK", CMD_ROLLBACK },
-    { "BEGIN",    CMD_BEGIN },    { "START",   CMD_BEGIN },
-    { "SAVEPOINT", CMD_SAVEPOINT }
+    { "BEGIN",    CMD_BEGIN },    { "SAVEPOINT", CMD_SAVEPOINT }
   };
   for (size_t i= 0; i < sizeof(keywords) / sizeof(keywords[0]); i++)
     if (strcmp(cmd, keywords[i].kw) == 0)
@@ -442,6 +443,34 @@ void extract_command(const char *query, size_t query_len,
     p++;
   }
   buf[n]= 0;
+
+  /* Disambiguate START: only "START TRANSACTION" opens a transaction —
+     START SLAVE / START REPLICA / START ALL SLAVES are admin commands.
+     Canonicalize "START TRANSACTION" to BEGIN (so it maps to CMD_BEGIN and
+     is counted together with BEGIN); any other START stays "START", which
+     command_bit() maps to CMD_OTHER. */
+  if (n == 5 && memcmp(buf, "START", 5) == 0 && buf_size >= 6)
+  {
+    const char *q= p;
+    while (q < end && is_space(*q))
+      q++;
+    char w[12];
+    size_t m= 0;
+    while (q < end && m + 1 < sizeof(w))
+    {
+      char c= *q;
+      if (c >= 'a' && c <= 'z')
+        c= (char) (c - 'a' + 'A');
+      else if (!(c >= 'A' && c <= 'Z'))
+        break;
+      w[m++]= c;
+      q++;
+    }
+    w[m]= 0;
+    if (strcmp(w, "TRANSACTION") == 0)
+      memcpy(buf, "BEGIN", 6);          /* 5 chars + NUL */
+  }
+
   if (n == 0)
   {
     const char other[]= "OTHER";

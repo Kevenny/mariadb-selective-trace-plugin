@@ -211,8 +211,11 @@ static void test_command_qualifiers()
   CHECK(command_bit("COMMIT") == CMD_COMMIT);
   CHECK(command_bit("ROLLBACK") == CMD_ROLLBACK);
   CHECK(command_bit("BEGIN") == CMD_BEGIN);
-  CHECK(command_bit("START") == CMD_BEGIN);         /* START TRANSACTION */
   CHECK(command_bit("SAVEPOINT") == CMD_SAVEPOINT);
+  /* bare START must NOT be a transaction begin (START SLAVE/REPLICA/...);
+     only START TRANSACTION opens one, and extract_command turns it into
+     BEGIN before command_bit ever sees it */
+  CHECK(command_bit("START") == CMD_OTHER);
 
   /* filter only commits of a schema */
   CHECK(parse_filter_lists("app:commit", "", &r, &err));
@@ -239,6 +242,16 @@ static void test_extract_command()
   CHECK(cmd("  insert into t values (1)") == "INSERT");
   CHECK(cmd("(SELECT 1) UNION (SELECT 2)") == "SELECT");
   CHECK(cmd("WITH cte AS (SELECT 1) SELECT * FROM cte") == "WITH");
+
+  /* START TRANSACTION canonicalizes to BEGIN; other START commands do not */
+  CHECK(cmd("START TRANSACTION") == "BEGIN");
+  CHECK(cmd("start transaction read only") == "BEGIN");
+  CHECK(cmd("BEGIN") == "BEGIN");
+  CHECK(cmd("START SLAVE") == "START");
+  CHECK(cmd("START REPLICA") == "START");
+  CHECK(cmd("START ALL SLAVES") == "START");
+  CHECK(cmd("COMMIT") == "COMMIT");
+  CHECK(cmd("ROLLBACK TO SAVEPOINT sp1") == "ROLLBACK");
 
   /* comentários de linha "--" (caso DBeaver: comentário anexado ao stmt) */
   CHECK(cmd("-- 3. Gerar eventos\nINSERT INTO testdb.t1 VALUES (1,'x')")

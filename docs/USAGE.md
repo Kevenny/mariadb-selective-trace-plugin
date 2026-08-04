@@ -128,9 +128,12 @@ An unknown token makes the `SET GLOBAL` fail. Duplicate entries have their
 masks merged (`a:insert, a:update` ≡ `a:insert|update`).
 
 The statement's command is the same as the `command` field (first SQL
-keyword, ignoring comments); `WITH` (CTE) counts as `select`, and `START`
-(TRANSACTION) counts as `begin`. Statements that cannot be classified fall
-under `other`.
+keyword, ignoring comments); `WITH` (CTE) counts as `select`, and
+`START TRANSACTION` is reported as `begin` (so it is counted together with
+`BEGIN`). Only `START TRANSACTION` opens a transaction — `START SLAVE`,
+`START REPLICA` and other `START ...` admin commands are **not** treated as
+`begin` (they classify as `other`). Statements that cannot be classified
+fall under `other`.
 
 > **Counting commits — read this first.** You can trace only commits with a
 > filter like `myschema:commit` and then count them:

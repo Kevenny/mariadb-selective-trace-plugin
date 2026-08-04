@@ -457,3 +457,25 @@ Removed --plugin-maturity=experimental from test-my.cnf and from the
 validate/security/valgrind scripts, so those now exercise the real default
 (no flag). SECURITY.md keeps the operational advice to review/pilot before
 enabling in production.
+
+## D24. Bug fix (v1.0.1): START SLAVE misclassified as a transaction BEGIN
+
+A code-review pass over the v0.9.0 transaction-command feature found a real
+false positive: command_bit mapped the bare keyword `START` to CMD_BEGIN, so
+`START SLAVE` / `START REPLICA` / `START ALL SLAVES` (replication admin
+commands) matched a `:begin` filter and were traced as transaction begins.
+Reproduced live: a `:begin` filter captured `START SLAVE`.
+
+Root cause: command_bit only sees the first keyword, so it can't tell
+`START TRANSACTION` from `START SLAVE`. Fix moves the disambiguation to
+extract_command (which has the full query): when the first keyword is
+`START`, it peeks the next word and, only if it is `TRANSACTION`,
+canonicalizes the command to `BEGIN`; any other `START` stays `START` and
+command_bit now maps bare `START` to CMD_OTHER. Result: `START TRANSACTION`
+and `BEGIN` both report/count as `BEGIN`; `START SLAVE` is `other`.
+
+Note: the pre-existing unit test actually asserted the buggy behavior
+(`command_bit("START") == CMD_BEGIN`) — a reminder that a green test only
+proves the code matches the test, not that the test encodes the right
+expectation. 8 new/updated unit tests (157 total), validated live, MTR and
+Valgrind clean, all three builds regenerated at 1.0.1.
