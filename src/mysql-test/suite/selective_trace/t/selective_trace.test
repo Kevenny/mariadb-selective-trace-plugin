@@ -29,14 +29,14 @@ show variables like 'selective_trace%';
 --echo # 2. Filter-list validation (bad entries are rejected)
 --echo #
 --error ER_WRONG_VALUE_FOR_VAR
-set global selective_trace_schemas_to_log= 'a.b';
+set global selective_trace_schemas= 'a.b';
 --error ER_WRONG_VALUE_FOR_VAR
-set global selective_trace_tables_to_log= 'nodot';
+set global selective_trace_tables= 'nodot';
 --error ER_WRONG_VALUE_FOR_VAR
-set global selective_trace_tables_to_log= 'schema.table.extra';
+set global selective_trace_tables= 'schema.table.extra';
 # command qualifier with an unknown token
 --error ER_WRONG_VALUE_FOR_VAR
-set global selective_trace_schemas_to_log= 'db:banana';
+set global selective_trace_schemas= 'db:banana';
 
 create database sl_hot;
 create database sl_cold;
@@ -48,8 +48,8 @@ create table sl_cold.t (id int primary key, v varchar(32));
 --echo #
 set global selective_trace_output= 'FILE';
 set global selective_trace_file_path= 'sl_case3.json';
-set global selective_trace_schemas_to_log= 'sl_hot';
-set global selective_trace_tables_to_log= '';
+set global selective_trace_schemas= 'sl_hot';
+set global selective_trace_tables= '';
 set global selective_trace_enabled= ON;
 
 insert into sl_hot.t values (1,'logged');
@@ -68,8 +68,8 @@ let SEARCH_PATTERN= sl_cold;
 --echo #
 set global selective_trace_enabled= OFF;
 set global selective_trace_file_path= 'sl_case4.json';
-set global selective_trace_schemas_to_log= '';
-set global selective_trace_tables_to_log= 'sl_cold.t:insert';
+set global selective_trace_schemas= '';
+set global selective_trace_tables= 'sl_cold.t:insert';
 set global selective_trace_enabled= ON;
 
 insert into sl_cold.t values (3,'insert logged');
@@ -90,8 +90,8 @@ let SEARCH_PATTERN= "command":"DELETE";
 --echo #
 set global selective_trace_enabled= OFF;
 set global selective_trace_file_path= 'sl_case5.json';
-set global selective_trace_schemas_to_log= '';
-set global selective_trace_tables_to_log= '';
+set global selective_trace_schemas= '';
+set global selective_trace_tables= '';
 set global selective_trace_enabled= ON;
 
 insert into sl_hot.t values (10,'x');
@@ -106,7 +106,7 @@ select v from sl_hot.t where id = 10;
 --echo #
 set global selective_trace_enabled= OFF;
 set global selective_trace_file_path= 'sl_case6.json';
-set global selective_trace_schemas_to_log= 'sl_hot,mysql';
+set global selective_trace_schemas= 'sl_hot,mysql';
 set global selective_trace_enabled= ON;
 
 create user sl_user@localhost identified by 'PlaintextSecret';
@@ -126,17 +126,17 @@ drop user sl_user@localhost;
 --echo #
 set global selective_trace_enabled= OFF;
 set global selective_trace_file_path= 'sl_case7.json';
-set global selective_trace_schemas_to_log= '';
-set global selective_trace_tables_to_log= '';
+set global selective_trace_schemas= '';
+set global selective_trace_tables= '';
 # an invalid (non-numeric) id is rejected
 --error ER_WRONG_VALUE_FOR_VAR
-set global selective_trace_connections_to_log= 'notanumber';
+set global selective_trace_connections= 'notanumber';
 # trace this very connection in full (STR sysvars take a literal, so grab
 # the id into an mtr variable and interpolate it; hide the query so the
 # result stays stable across runs since the id varies)
 let $cid= `SELECT CONNECTION_ID()`;
 --disable_query_log
-eval set global selective_trace_connections_to_log= '$cid';
+eval set global selective_trace_connections= '$cid';
 --enable_query_log
 set global selective_trace_enabled= ON;
 
@@ -150,7 +150,7 @@ let SEARCH_PATTERN= "command":"DO";
 let SEARCH_PATTERN= "command":"SELECT";
 --source include/search_pattern_in_file.inc
 
-set global selective_trace_connections_to_log= '';
+set global selective_trace_connections= '';
 
 --echo #
 --echo # 8. Clean up

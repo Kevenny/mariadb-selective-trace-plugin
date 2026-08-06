@@ -36,8 +36,8 @@
   the hot path only takes read locks, so queries never serialize.
 */
 
-#define PLUGIN_VERSION      0x0101
-#define PLUGIN_STR_VERSION  "1.0.1"
+#define PLUGIN_VERSION      0x0110
+#define PLUGIN_STR_VERSION  "1.1.0"
 
 #include <my_global.h>
 #include <my_pthread.h>
@@ -153,9 +153,9 @@ static unsigned long long now_ns()
    ------------------------------------------------------------------------ */
 
 static my_bool opt_enabled= FALSE;
-static char *opt_schemas_to_log= NULL;
-static char *opt_tables_to_log= NULL;
-static char *opt_connections_to_log= NULL;
+static char *opt_schemas= NULL;
+static char *opt_tables= NULL;
+static char *opt_connections= NULL;
 static ulong opt_output= 0;
 static char *opt_file_path= NULL;
 static uint opt_min_duration_ms= 0;
@@ -191,9 +191,9 @@ try
       my_printf_error(ER_WRONG_VALUE_FOR_VAR,
                       "selective_trace: invalid entry '%s' in %s",
                       MYF(0), bad_token.c_str(),
-                      is_table_list ? "tables_to_log (expected schema.table"
+                      is_table_list ? "tables (expected schema.table"
                                       " or schema.*)"
-                                    : "schemas_to_log");
+                                    : "schemas");
       return 1;
     }
   }
@@ -208,19 +208,19 @@ catch (...)
   return 1;
 }
 
-static int check_schemas_to_log(MYSQL_THD thd, struct st_mysql_sys_var *var,
+static int check_schemas(MYSQL_THD thd, struct st_mysql_sys_var *var,
                                 void *save, struct st_mysql_value *value)
 {
   return check_filter_list(thd, var, save, value, 0);
 }
 
-static int check_tables_to_log(MYSQL_THD thd, struct st_mysql_sys_var *var,
+static int check_tables(MYSQL_THD thd, struct st_mysql_sys_var *var,
                                void *save, struct st_mysql_value *value)
 {
   return check_filter_list(thd, var, save, value, 1);
 }
 
-static int check_connections_to_log(MYSQL_THD thd __attribute__((unused)),
+static int check_connections(MYSQL_THD thd __attribute__((unused)),
                                     struct st_mysql_sys_var *var
                                       __attribute__((unused)),
                                     void *save, struct st_mysql_value *value)
@@ -236,7 +236,7 @@ try
   {
     my_printf_error(ER_WRONG_VALUE_FOR_VAR,
                     "selective_trace: invalid entry '%s' in"
-                    " connections_to_log (expected a decimal connection id)",
+                    " connections (expected a decimal connection id)",
                     MYF(0), bad_token.c_str());
     return 1;
   }
@@ -306,7 +306,7 @@ static void update_filter_list(void *var_ptr, const void *save,
   mysql_rwlock_unlock(&filter_lock);
 }
 
-static void update_schemas_to_log(MYSQL_THD thd __attribute__((unused)),
+static void update_schemas(MYSQL_THD thd __attribute__((unused)),
                                   struct st_mysql_sys_var *var
                                     __attribute__((unused)),
                                   void *var_ptr, const void *save)
@@ -314,7 +314,7 @@ static void update_schemas_to_log(MYSQL_THD thd __attribute__((unused)),
   update_filter_list(var_ptr, save, FK_SCHEMAS);
 }
 
-static void update_tables_to_log(MYSQL_THD thd __attribute__((unused)),
+static void update_tables(MYSQL_THD thd __attribute__((unused)),
                                  struct st_mysql_sys_var *var
                                    __attribute__((unused)),
                                  void *var_ptr, const void *save)
@@ -322,7 +322,7 @@ static void update_tables_to_log(MYSQL_THD thd __attribute__((unused)),
   update_filter_list(var_ptr, save, FK_TABLES);
 }
 
-static void update_connections_to_log(MYSQL_THD thd __attribute__((unused)),
+static void update_connections(MYSQL_THD thd __attribute__((unused)),
                                        struct st_mysql_sys_var *var
                                          __attribute__((unused)),
                                        void *var_ptr, const void *save)
@@ -361,25 +361,25 @@ static MYSQL_SYSVAR_BOOL(enabled, opt_enabled, PLUGIN_VAR_OPCMDARG,
   "Enable/disable selective query logging.",
   NULL, NULL, FALSE);
 
-static MYSQL_SYSVAR_STR(schemas_to_log, opt_schemas_to_log,
+static MYSQL_SYSVAR_STR(schemas, opt_schemas,
   PLUGIN_VAR_RQCMDARG,
   "Comma separated list of schemas whose queries are logged."
   " Empty means no schema filter.",
-  check_schemas_to_log, update_schemas_to_log, "");
+  check_schemas, update_schemas, "");
 
-static MYSQL_SYSVAR_STR(tables_to_log, opt_tables_to_log,
+static MYSQL_SYSVAR_STR(tables, opt_tables,
   PLUGIN_VAR_RQCMDARG,
   "Comma separated list of schema.table entries logged regardless of the"
   " schema filter (schema.* matches the whole schema)."
   " Empty means no table filter.",
-  check_tables_to_log, update_tables_to_log, "");
+  check_tables, update_tables, "");
 
-static MYSQL_SYSVAR_STR(connections_to_log, opt_connections_to_log,
+static MYSQL_SYSVAR_STR(connections, opt_connections,
   PLUGIN_VAR_RQCMDARG,
   "Comma separated list of connection ids (as in SHOW PROCESSLIST). Every"
   " statement of a listed connection is traced in full, regardless of the"
   " schema/table filters. Empty means no connection filter.",
-  check_connections_to_log, update_connections_to_log, "");
+  check_connections, update_connections, "");
 
 static MYSQL_SYSVAR_ENUM(output, opt_output, PLUGIN_VAR_RQCMDARG,
   "Log destination. FILE writes one JSON object per line to"
@@ -406,9 +406,9 @@ static MYSQL_SYSVAR_BOOL(mask_passwords, opt_mask_passwords,
 static struct st_mysql_sys_var *selective_trace_sysvars[]=
 {
   MYSQL_SYSVAR(enabled),
-  MYSQL_SYSVAR(schemas_to_log),
-  MYSQL_SYSVAR(tables_to_log),
-  MYSQL_SYSVAR(connections_to_log),
+  MYSQL_SYSVAR(schemas),
+  MYSQL_SYSVAR(tables),
+  MYSQL_SYSVAR(connections),
   MYSQL_SYSVAR(output),
   MYSQL_SYSVAR(file_path),
   MYSQL_SYSVAR(min_duration_ms),
@@ -545,7 +545,7 @@ static void state_begin_statement(StatementState *st,
   Server-internal bookkeeping tables (engine-independent statistics) get
   locked as a side effect of ordinary DML and are not part of the user's
   query. They are recorded/matched only when explicitly listed in
-  selective_trace_tables_to_log.
+  selective_trace_tables.
 */
 static bool is_internal_stats_table(const char *db, size_t db_len,
                                     const char *tbl, size_t tbl_len)
@@ -916,11 +916,11 @@ static int selective_trace_init(void *arg __attribute__((unused)))
   selective_trace::table_writer_init();
 
   schemas_storage= new (std::nothrow) std::string(
-      opt_schemas_to_log ? opt_schemas_to_log : "");
+      opt_schemas ? opt_schemas : "");
   tables_storage= new (std::nothrow) std::string(
-      opt_tables_to_log ? opt_tables_to_log : "");
+      opt_tables ? opt_tables : "");
   connections_storage= new (std::nothrow) std::string(
-      opt_connections_to_log ? opt_connections_to_log : "");
+      opt_connections ? opt_connections : "");
   file_path_storage= new (std::nothrow) std::string(
       opt_file_path ? opt_file_path : "");
   if (schemas_storage == NULL || tables_storage == NULL ||
@@ -929,9 +929,9 @@ static int selective_trace_init(void *arg __attribute__((unused)))
 
   /* Point the sysvars at our storage from the start, so the update
      callbacks and SHOW VARIABLES always deal with the same memory. */
-  opt_schemas_to_log= const_cast<char *>(schemas_storage->c_str());
-  opt_tables_to_log= const_cast<char *>(tables_storage->c_str());
-  opt_connections_to_log= const_cast<char *>(connections_storage->c_str());
+  opt_schemas= const_cast<char *>(schemas_storage->c_str());
+  opt_tables= const_cast<char *>(tables_storage->c_str());
+  opt_connections= const_cast<char *>(connections_storage->c_str());
   opt_file_path= const_cast<char *>(file_path_storage->c_str());
 
   if (rebuild_rules_locked(schemas_storage->c_str(),

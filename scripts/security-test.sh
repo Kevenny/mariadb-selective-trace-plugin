@@ -24,7 +24,7 @@ ls -Z /usr/lib64/mysql/plugin/selective_trace.so 2>/dev/null || \
 
 /usr/sbin/mariadbd --user=mysql --skip-networking --socket=/tmp/m.sock \
     --selective_trace_enabled=ON \
-    --selective_trace_schemas_to_log=app \
+    --selective_trace_schemas=app \
     --selective_trace_file_path=/var/lib/mysql/sec.json \
     >/tmp/mariadbd.log 2>&1 &
 for i in $(seq 1 60); do mariadb -uroot -S /tmp/m.sock -e "SELECT 1" >/dev/null 2>&1 && break; sleep 1; done
@@ -126,7 +126,7 @@ echo ""
 echo "### T4 — Vazamento de segredos em cleartext"
 # =====================================================================
 : > /var/lib/mysql/sec.json 2>/dev/null || true
-$M -e "SET GLOBAL selective_trace_schemas_to_log='app,mysql'"
+$M -e "SET GLOBAL selective_trace_schemas='app,mysql'"
 $M app -e "CREATE USER IF NOT EXISTS leaky@localhost IDENTIFIED BY 'SuperSecret123'" 2>/dev/null
 $M app -e "SET PASSWORD FOR leaky@localhost = PASSWORD('AnotherSecret456')" 2>/dev/null
 $M app -e "INSERT INTO t (v) VALUES ('api_key=sk-INLINE-SECRET-789')" 2>/dev/null

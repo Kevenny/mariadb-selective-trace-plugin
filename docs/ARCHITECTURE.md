@@ -46,7 +46,7 @@ descrita no `CLAUDE.md`, e atualizar este arquivo se algo mudar.
 
 ### 1. `filter_engine` (lógica pura, sem dependência do MariaDB)
 Responsável por:
-- Parsear as strings `schemas_to_log` e `tables_to_log` em estruturas de
+- Parsear as strings `schemas` e `tables` em estruturas de
   dados eficientes para lookup (ex: `std::unordered_set<std::string>`).
 - Expor `should_log(schema, table_list) -> bool`.
 - Ser testável de forma isolada (unit test standalone, sem precisar
@@ -78,8 +78,8 @@ Responsável por:
 
 ### 5. Sysvars (variáveis de sistema)
 Todas `GLOBAL` e dinâmicas (`PLUGIN_VAR_RQCMDARG`), conforme listado no
-`CLAUDE.md` seção 4.4. As variáveis de string (`schemas_to_log`,
-`tables_to_log`) devem ter uma função `update` que re-parseia e atualiza o
+`CLAUDE.md` seção 4.4. As variáveis de string (`schemas`,
+`tables`) devem ter uma função `update` que re-parseia e atualiza o
 `filter_engine` de forma thread-safe (lock de escrita curto, só durante a
 troca do ponteiro/estrutura).
 

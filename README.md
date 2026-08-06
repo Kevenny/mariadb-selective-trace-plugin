@@ -37,8 +37,8 @@ millisecond duration, benchmark and Valgrind. Measured overhead: **~0%**
 ```sql
 INSTALL PLUGIN selective_trace SONAME 'selective_trace.so';
 SET GLOBAL selective_trace_enabled = ON;
-SET GLOBAL selective_trace_schemas_to_log = 'sales';             -- by schema
-SET GLOBAL selective_trace_tables_to_log  = 'hr.salaries,logs.*'; -- by table
+SET GLOBAL selective_trace_schemas = 'sales';             -- by schema
+SET GLOBAL selective_trace_tables  = 'hr.salaries,logs.*'; -- by table
 -- => one JSON line per event in selective_trace.json (datadir), or:
 SET GLOBAL selective_trace_output = 'TABLE';   -- mysql.selective_trace_events
 ```
@@ -105,7 +105,7 @@ docker compose -f docker/docker-compose.yml exec mariadb-test \
 
 `docker/test-my.cnf` already loads the plugin
 (`plugin-load-add=selective_trace.so`) with the initial filter
-`selective_trace_schemas_to_log=testdb`.
+`selective_trace_schemas=testdb`.
 
 ### 5. Benchmark and Valgrind
 

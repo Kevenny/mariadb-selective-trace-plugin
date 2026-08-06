@@ -44,8 +44,8 @@ set_scenario() {  # <enabled> <general_log> <schemas_filter> <output>
     $MYSQL -e "
         SET GLOBAL selective_trace_enabled=$1;
         SET GLOBAL general_log=$2;
-        SET GLOBAL selective_trace_schemas_to_log='$3';
-        SET GLOBAL selective_trace_tables_to_log='';
+        SET GLOBAL selective_trace_schemas='$3';
+        SET GLOBAL selective_trace_tables='';
         SET GLOBAL selective_trace_output='$4';
         SET GLOBAL selective_trace_file_path='$LOG_PATH';
         SET GLOBAL selective_trace_min_duration_ms=0;

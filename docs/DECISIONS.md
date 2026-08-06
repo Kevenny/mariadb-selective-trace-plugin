@@ -181,7 +181,7 @@ Ajustes motivados por um INSERT via DBeaver logado com `command=OTHER`:
 3. **Exclusão de bookkeeping**: `mysql.{table,column,index}_stats` e
    `mysql.innodb_{table,index}_stats` são lockadas como efeito colateral de
    DML (EITS/InnoDB persistent stats) e poluíam `tables_involved`. Agora só
-   contam se listadas explicitamente em `tables_to_log`.
+   contam se listadas explicitamente em `tables`.
 4. **Truncamento visível**: buffer de tabelas por conexão subiu para ~3,9 KB
    e o estouro é sinalizado (`"tables_truncated":true` no JSON, `,...` na
    tabela) em vez de silencioso.
@@ -338,7 +338,7 @@ de compliance (registro imutável, foco em quem/quando) que não são o caso.
 Renomeado `selective_log` → `selective_trace` em todo o projeto:
 
 - Nome do plugin, namespace C++, include guards, arquivo `selective_trace.cc`.
-- Variáveis `selective_trace_*` (mantido `_to_log` em schemas/tables — o
+- Variáveis `selective_trace_*` (mantido `` em schemas/tables — o
   sufixo descreve a ação de rastrear; `log_file_path` virou `file_path`,
   removendo o "log" redundante).
 - Tabela `mysql.selective_trace_events`, status `Selective_trace_*`.
@@ -392,13 +392,13 @@ plain globals incremented without atomics, so under heavy concurrency the
 reported totals can slightly under-count. Diagnostic-only; never corrupts
 state. Would move to atomics if precise counts become a requirement.
 
-## D22. Per-connection tracing (v0.8.0): connections_to_log
+## D22. Per-connection tracing (v0.8.0): connections
 
 Trace requirement: capture everything a specific connection runs (a session
 spotted in SHOW PROCESSLIST), regardless of schema/table — the diagnostic
 counterpart of "general_log, but for one connection".
 
-- New sysvar `selective_trace_connections_to_log`: comma-separated decimal
+- New sysvar `selective_trace_connections`: comma-separated decimal
   connection ids. Parsed (in filter_engine, testable) into a sorted,
   de-duplicated vector; matched with binary_search in the hot path.
 - Semantics (chosen with the user): a listed connection is traced **in
@@ -479,3 +479,27 @@ Note: the pre-existing unit test actually asserted the buggy behavior
 proves the code matches the test, not that the test encodes the right
 expectation. 8 new/updated unit tests (157 total), validated live, MTR and
 Valgrind clean, all three builds regenerated at 1.0.1.
+
+## D25. Breaking rename (v1.1.0): drop the `_to_log` suffix from filter vars
+
+The three filter list variables carried a redundant `_to_log` suffix — every
+variable already lives under the `selective_trace_` namespace, so `_to_log`
+only added noise. Renamed for a cleaner, shorter API:
+
+| Before | After |
+|---|---|
+| `selective_trace_schemas_to_log` | `selective_trace_schemas` |
+| `selective_trace_tables_to_log` | `selective_trace_tables` |
+| `selective_trace_connections_to_log` | `selective_trace_connections` |
+
+The internal C identifiers backing them (`opt_*`, `check_*`, `update_*`) lost
+the suffix too, for consistency. The pure filter engine
+(`filter_engine.{h,cc}`) and its 157 unit tests were unaffected — only a
+header comment mentions the names.
+
+**This is a breaking change**: any `my.cnf`, init file, or automation using
+the old names fails with "Unknown system variable". Hence the minor bump to
+**1.1.0** (SemVer: pre-1.0 would have allowed a patch, but post-1.0 a public
+rename is at least a minor). Migration is a mechanical `sed 's/_to_log//g'`
+over your config — see CHANGELOG.md. No behavior, output format, or table
+schema changed.

@@ -25,7 +25,7 @@ echo ">> [3/4] Starting mariadbd with the plugin"
     --socket=/tmp/m.sock \
     --plugin-load-add=selective_trace.so \
     --selective_trace_enabled=ON \
-    --selective_trace_schemas_to_log=hotdb \
+    --selective_trace_schemas=hotdb \
     --selective_trace_file_path=/tmp/selective_trace.json \
     >/tmp/mariadbd.log 2>&1 &
 

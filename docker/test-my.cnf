@@ -6,7 +6,7 @@ plugin-load-add=selective_trace.so
 # Configuração inicial do plugin selective_trace (ver docs/ARCHITECTURE.md)
 selective_trace_enabled=ON
 selective_trace_file_path=/var/lib/mysql/selective_trace.json
-selective_trace_schemas_to_log=testdb
-selective_trace_tables_to_log=
+selective_trace_schemas=testdb
+selective_trace_tables=
 
 general_log=OFF

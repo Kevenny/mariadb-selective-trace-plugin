@@ -97,9 +97,9 @@ All dynamic (`SET GLOBAL`), no restart needed:
 | Variable | Type | Default | Description |
 |---|---|---|---|
 | `selective_trace_enabled` | BOOL | `OFF` | Enable/disable capture |
-| `selective_trace_schemas_to_log` | VARCHAR | `''` | Comma-separated list of schemas |
-| `selective_trace_tables_to_log` | VARCHAR | `''` | Comma-separated `schema.table` list (cross-schema); `schema.*` = the whole schema |
-| `selective_trace_connections_to_log` | VARCHAR | `''` | Comma-separated connection ids (as in `SHOW PROCESSLIST`). Every statement of a listed connection is traced in full, regardless of the schema/table filters |
+| `selective_trace_schemas` | VARCHAR | `''` | Comma-separated list of schemas |
+| `selective_trace_tables` | VARCHAR | `''` | Comma-separated `schema.table` list (cross-schema); `schema.*` = the whole schema |
+| `selective_trace_connections` | VARCHAR | `''` | Comma-separated connection ids (as in `SHOW PROCESSLIST`). Every statement of a listed connection is traced in full, regardless of the schema/table filters |
 | `selective_trace_output` | ENUM | `FILE` | `FILE` (one JSON line) or `TABLE` (`mysql.selective_trace_events`) |
 | `selective_trace_file_path` | VARCHAR | `selective_trace.json` | Log file in FILE mode (relative = datadir) |
 | `selective_trace_min_duration_ms` | INT | `0` | Log only queries slower than N ms (0 = all) |
@@ -112,10 +112,10 @@ restricting **which commands** are logged for that schema/table:
 
 ```sql
 -- schema "sales" only INSERT and UPDATE; schema "hr" everything
-SET GLOBAL selective_trace_schemas_to_log = 'sales:insert|update, hr';
+SET GLOBAL selective_trace_schemas = 'sales:insert|update, hr';
 
 -- table app.orders only DELETE; the whole "logs" schema only DML
-SET GLOBAL selective_trace_tables_to_log = 'app.orders:delete, logs.*:dml';
+SET GLOBAL selective_trace_tables = 'app.orders:delete, logs.*:dml';
 ```
 
 Valid tokens: `select`, `insert`, `update`, `delete`, `replace`, `load`,
@@ -153,17 +153,17 @@ fall under `other`.
 
 - **Both lists empty ⇒ nothing is logged** (fail-safe: the plugin never
   accidentally becomes a general_log).
-- A query is logged if: **some touched table** matches `tables_to_log`, **or**
+- A query is logged if: **some touched table** matches `tables`, **or**
   the touched table/schema or the **session's current schema** matches
-  `schemas_to_log`.
+  `schemas`.
 - Multi-table `JOIN`: a single matching table is enough to log (the record
   carries all touched tables).
 - Matching is **case-insensitive** (ASCII); optional backticks are accepted.
 - Statements that touch no table (`SET`, `SHOW`, `SELECT 1`) are logged only
   if the session's current schema (`USE ...`) matches the schema filter — or
-  if the connection is in `connections_to_log` (see below).
+  if the connection is in `connections` (see below).
 - **Trace a whole connection**: put its id in
-  `selective_trace_connections_to_log` and *every* statement of that
+  `selective_trace_connections` and *every* statement of that
   connection is traced (all commands, tables or not), regardless of the
   schema/table filters. Ideal for diagnosing one problematic session spotted
   in `SHOW PROCESSLIST`. `min_duration_ms` still applies (fast queries are
@@ -171,8 +171,8 @@ fall under `other`.
 - Invalid values are rejected at `SET GLOBAL` time:
 
 ```
-SET GLOBAL selective_trace_tables_to_log='nodot';
-ERROR 1231: selective_trace: invalid entry 'nodot' in tables_to_log
+SET GLOBAL selective_trace_tables='nodot';
+ERROR 1231: selective_trace: invalid entry 'nodot' in tables
             (expected schema.table or schema.*)
 ```
 
@@ -180,28 +180,28 @@ ERROR 1231: selective_trace: invalid entry 'nodot' in tables_to_log
 
 ```sql
 -- Trace everything touching the production schema "sales"
-SET GLOBAL selective_trace_schemas_to_log = 'sales';
+SET GLOBAL selective_trace_schemas = 'sales';
 SET GLOBAL selective_trace_enabled = ON;
 
 -- Trace only two sensitive tables, regardless of the session schema
-SET GLOBAL selective_trace_schemas_to_log = '';
-SET GLOBAL selective_trace_tables_to_log = 'hr.salaries,finance.payments';
+SET GLOBAL selective_trace_schemas = '';
+SET GLOBAL selective_trace_tables = 'hr.salaries,finance.payments';
 
 -- The whole "logs" schema + one standalone table
-SET GLOBAL selective_trace_tables_to_log = 'logs.*,app.orders';
+SET GLOBAL selective_trace_tables = 'logs.*,app.orders';
 
 -- Only slow queries (>250ms) of the app schema
-SET GLOBAL selective_trace_schemas_to_log = 'app';
+SET GLOBAL selective_trace_schemas = 'app';
 SET GLOBAL selective_trace_min_duration_ms = 250;
 
 -- Trace EVERYTHING from connections 4711 and 4720 (spotted in the
 -- processlist), regardless of schema/table
-SET GLOBAL selective_trace_connections_to_log = '4711,4720';
+SET GLOBAL selective_trace_connections = '4711,4720';
 SET GLOBAL selective_trace_enabled = ON;
 
 -- Count explicit commits per hour on the app schema (see the caveat above
 -- about autocommit)
-SET GLOBAL selective_trace_schemas_to_log = 'app:commit';
+SET GLOBAL selective_trace_schemas = 'app:commit';
 SET GLOBAL selective_trace_output = 'TABLE';
 SET GLOBAL selective_trace_enabled = ON;
 -- then:
@@ -240,7 +240,7 @@ Notes:
   `mysql.column_stats`, `mysql.index_stats`, `mysql.innodb_table_stats`,
   `mysql.innodb_index_stats`) are touched as a side effect of ordinary DML
   and do **not** appear in `tables` — unless they are explicitly listed in
-  `selective_trace_tables_to_log`.
+  `selective_trace_tables`.
 - `command` ignores leading comments of every flavor (`-- `, `#`, `/* */`,
   `/*! */`, `/*M! */`) and parentheses — an `INSERT` sent with an attached
   comment (DBeaver's default behavior) is classified as `INSERT`. The `query`

@@ -75,13 +75,13 @@ struct FilterEntry
 
 struct FilterRules
 {
-  /* From selective_trace_schemas_to_log: lowercase schema names. */
+  /* From selective_trace_schemas: lowercase schema names. */
   std::vector<FilterEntry> schemas;
-  /* From "schema.*" entries of selective_trace_tables_to_log. */
+  /* From "schema.*" entries of selective_trace_tables. */
   std::vector<FilterEntry> wildcard_schemas;
-  /* From selective_trace_tables_to_log: lowercase "schema.table". */
+  /* From selective_trace_tables: lowercase "schema.table". */
   std::vector<FilterEntry> tables;
-  /* From selective_trace_connections_to_log: connection ids, sorted. A
+  /* From selective_trace_connections: connection ids, sorted. A
      listed connection is traced in full (all its statements), regardless
      of the schema/table filters. */
   std::vector<unsigned long long> connections;
