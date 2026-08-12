@@ -14,10 +14,9 @@
    Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1335 USA */
 
 #include <my_global.h>
-#include <my_pthread.h>
+#include <my_pthread.h>            /* portable pthread API (POSIX + Windows) */
 #include <mysql/plugin.h>          /* pulls mysql/services.h (sql service) */
 
-#include <pthread.h>
 #include <deque>
 #include <string>
 #include <cstdio>
@@ -46,8 +45,12 @@ static const char CREATE_LOG_TABLE_SQL[]=
 
 static const size_t QUEUE_MAX_EVENTS= 10000;
 
-static pthread_mutex_t q_mutex= PTHREAD_MUTEX_INITIALIZER;
-static pthread_cond_t q_cond= PTHREAD_COND_INITIALIZER;
+/* Initialized at runtime in table_writer_init(): the PTHREAD_*_INITIALIZER
+   static forms do not exist on Windows (CRITICAL_SECTION/CONDITION_VARIABLE
+   need runtime init), so we cannot statically initialize these. */
+static pthread_mutex_t q_mutex;
+static pthread_cond_t q_cond;
+static int sync_inited= 0;
 static std::deque<std::string> *queue= NULL;
 static int thread_running= 0;
 static int stop_requested= 0;
@@ -209,6 +212,15 @@ static bool start_thread_locked()
 
 void table_writer_init()
 {
+  /* Runtime init of the sync primitives — safe here because the plugin init
+     path is single-threaded (no query events yet). Guarded so a re-INSTALL
+     after shutdown re-initializes cleanly. */
+  if (!sync_inited)
+  {
+    pthread_mutex_init(&q_mutex, NULL);
+    pthread_cond_init(&q_cond, NULL);
+    sync_inited= 1;
+  }
   pthread_mutex_lock(&q_mutex);
   if (queue == NULL)
   {
@@ -247,6 +259,13 @@ void table_writer_shutdown()
   delete queue;
   queue= NULL;
   pthread_mutex_unlock(&q_mutex);
+
+  if (sync_inited)
+  {
+    pthread_mutex_destroy(&q_mutex);
+    pthread_cond_destroy(&q_cond);
+    sync_inited= 0;
+  }
 }
 
 bool table_writer_enqueue(std::string *sql)

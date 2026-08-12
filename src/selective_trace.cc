@@ -36,8 +36,8 @@
   the hot path only takes read locks, so queries never serialize.
 */
 
-#define PLUGIN_VERSION      0x0110
-#define PLUGIN_STR_VERSION  "1.1.0"
+#define PLUGIN_VERSION      0x0120
+#define PLUGIN_STR_VERSION  "1.2.0"
 
 #include <my_global.h>
 #include <my_pthread.h>
@@ -52,7 +52,7 @@
 #include <cstdio>
 #include <cstring>
 #include <ctime>
-#include <sys/time.h>
+#include <my_sys.h>              /* my_interval_timer(), my_hrtime() */
 
 #include "filter_engine.h"
 #include "log_writer_file.h"
@@ -101,7 +101,7 @@ struct StatementState
 {
   unsigned int magic;
   unsigned long long query_id;
-  unsigned long long start_ns;          /* CLOCK_MONOTONIC at dispatch     */
+  unsigned long long start_ns;          /* my_interval_timer() at dispatch */
   int have_start;                       /* start_ns valid for this stmt    */
   int in_statement;                     /* between GENERAL_LOG and STATUS  */
   unsigned int cmd_mask;                /* allowed CommandBits from table
@@ -142,10 +142,9 @@ static StatementState *get_state(MYSQL_THD thd)
 
 static unsigned long long now_ns()
 {
-  struct timespec ts;
-  clock_gettime(CLOCK_MONOTONIC, &ts);
-  return (unsigned long long) ts.tv_sec * 1000000000ULL +
-         (unsigned long long) ts.tv_nsec;
+  /* my_interval_timer() is MariaDB's portable monotonic timer in nanoseconds;
+     it works on POSIX and Windows, unlike clock_gettime(CLOCK_MONOTONIC). */
+  return (unsigned long long) my_interval_timer();
 }
 
 /* ------------------------------------------------------------------------
@@ -704,18 +703,19 @@ static void handle_status_event(MYSQL_THD thd,
         (duration_ms < 0 || duration_ms < (double) opt_min_duration_ms))
       goto reset;
 
-    /* timestamp with milliseconds (wall clock) */
-    struct timeval tv;
+    /* timestamp with milliseconds (wall clock). my_hrtime() is MariaDB's
+       portable wall clock (microseconds since the epoch) and replaces the
+       POSIX gettimeofday(); localtime_r() is portable via my_pthread.h. */
+    unsigned long long usec= (unsigned long long) my_hrtime().val;
     struct tm tm_time;
-    gettimeofday(&tv, NULL);
-    time_t secs= (time_t) tv.tv_sec;
+    time_t secs= (time_t) (usec / 1000000ULL);
     localtime_r(&secs, &tm_time);
 
     char ts[32];
     snprintf(ts, sizeof(ts), "%04d-%02d-%02d %02d:%02d:%02d.%03d",
              tm_time.tm_year + 1900, tm_time.tm_mon + 1, tm_time.tm_mday,
              tm_time.tm_hour, tm_time.tm_min, tm_time.tm_sec,
-             (int) (tv.tv_usec / 1000));
+             (int) ((usec / 1000ULL) % 1000ULL));
 
     const int have_tables= (st->in_statement && st->tables_len > 0);
     char numbuf[64];

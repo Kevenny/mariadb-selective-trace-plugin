@@ -4,6 +4,26 @@ All notable changes to `selective_trace` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/), and the
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.2.0] - 2026-08-06
+
+### Added
+
+- **Windows 10/11 support.** The plugin now compiles under MSVC and loads into
+  a Windows MariaDB server as a native `.dll`. A GitHub Actions workflow
+  (`.github/workflows/windows.yml`) builds one `.dll` per server series
+  (11.4 / 12.3) on a `windows-2022` runner and uploads it as an artifact.
+  Runtime homologation guide: `docs/WINDOWS.md`.
+
+### Changed
+
+- Replaced the OS-specific code paths with MariaDB's portable wrappers, with no
+  behavior change on Linux (MTR unchanged):
+  - `clock_gettime(CLOCK_MONOTONIC)` → `my_interval_timer()` (monotonic ns);
+  - `gettimeofday()` → `my_hrtime()` (wall-clock µs);
+  - the table-writer's `pthread` mutex/cond are now initialized at runtime
+    (the static `PTHREAD_*_INITIALIZER` forms do not exist on Windows), using
+    the pthread API that `my_pthread.h` emulates on Windows.
+
 ## [1.1.0] - 2026-08-06
 
 ### Changed (BREAKING)

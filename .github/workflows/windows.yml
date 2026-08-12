@@ -1,0 +1,110 @@
+name: Windows build
+
+# Homologation build for Windows 10/11: compiles selective_trace as a native
+# MSVC .dll against the real MariaDB source and publishes it as an artifact.
+# This proves the code is MSVC/Windows-portable (the POSIX bits were replaced
+# by MariaDB's portable wrappers: my_interval_timer/my_hrtime, and pthread via
+# my_pthread.h). Runtime homologation (INSTALL PLUGIN + functional matrix on a
+# real Windows server) is documented in docs/WINDOWS.md.
+#
+# The full server has to be built because plugin headers (plugin_audit.h) and
+# the server import library ship only with the source, not with any -devel
+# package (same reason the Linux CI builds from source). This is expensive, so
+# it runs only on release tags and on manual dispatch — never on every push.
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-windows:
+    name: Build .dll (MariaDB ${{ matrix.series }})
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        # One .dll per server series: the audit ABI differs (0x0302 on 11.4 vs
+        # 0x0303 on 12.3), so a 11.4 .dll will not load on a 12.3 server.
+        series: ['11.4.4', '12.3.2']
+    env:
+      MARIADB_SRC: ${{ runner.temp }}\mariadb-src
+      MARIADB_BUILD: ${{ runner.temp }}\mariadb-build
+    steps:
+      - name: Checkout plugin
+        uses: actions/checkout@v5
+
+      # MariaDB's parser is generated at build time from sql_yacc.yy; the git
+      # source (unlike the release tarball) ships no pre-generated parser, so a
+      # bison is required. winflexbison3 provides win_bison.exe.
+      - name: Install bison (winflexbison3)
+        run: choco install winflexbison3 -y --no-progress
+
+      - name: Resolve bison path
+        id: bison
+        shell: pwsh
+        run: |
+          $b = (Get-Command win_bison -ErrorAction SilentlyContinue).Source
+          if (-not $b) { throw "win_bison not found after choco install" }
+          "path=$b" >> $env:GITHUB_OUTPUT
+          Write-Host "bison: $b"
+
+      - name: Clone MariaDB ${{ matrix.series }} source
+        shell: pwsh
+        run: |
+          git clone --branch "mariadb-${{ matrix.series }}" --depth 1 `
+            https://github.com/MariaDB/server.git "$env:MARIADB_SRC"
+          Push-Location "$env:MARIADB_SRC"
+          git submodule update --init --recursive --depth 1
+          Pop-Location
+
+      # Same mechanism as the Linux build.sh (which symlinks src/ into the tree);
+      # on Windows we copy, since MYSQL_ADD_PLUGIN discovers plugins under plugin/.
+      - name: Graft plugin into the MariaDB source tree
+        shell: pwsh
+        run: |
+          Copy-Item -Recurse -Force "${{ github.workspace }}\src" `
+            "$env:MARIADB_SRC\plugin\selective_trace"
+
+      - name: Configure (CMake · Visual Studio 2022 · x64)
+        shell: pwsh
+        run: |
+          cmake -S "$env:MARIADB_SRC" -B "$env:MARIADB_BUILD" `
+            -G "Visual Studio 17 2022" -A x64 `
+            -DBISON_EXECUTABLE="${{ steps.bison.outputs.path }}" `
+            -DPLUGIN_SELECTIVE_TRACE=DYNAMIC `
+            -DWITH_SSL=bundled `
+            -DWITH_UNIT_TESTS=OFF `
+            -DWITH_EMBEDDED_SERVER=OFF `
+            -DWITHOUT_TOKUDB=1 -DWITHOUT_MROONGA=1 -DWITHOUT_ROCKSDB=1 `
+            -DWITHOUT_OQGRAPH=1 -DWITHOUT_SPHINX=1 -DWITHOUT_COLUMNSTORE=1 `
+            -DWITHOUT_SPIDER=1
+
+      # Building the DYNAMIC plugin target transitively builds the server bits it
+      # links against (the import library), which is the bulk of the time.
+      - name: Build plugin (.dll)
+        shell: pwsh
+        run: cmake --build "$env:MARIADB_BUILD" --config RelWithDebInfo --target selective_trace
+
+      - name: Locate and name the .dll
+        id: find
+        shell: pwsh
+        run: |
+          $dll = Get-ChildItem -Path "$env:MARIADB_BUILD" -Recurse -Filter selective_trace.dll |
+                 Select-Object -First 1
+          if (-not $dll) { throw "selective_trace.dll not found under $env:MARIADB_BUILD" }
+          $out = "selective_trace-${{ matrix.series }}-win64.dll"
+          Copy-Item $dll.FullName $out
+          "dll=$out" >> $env:GITHUB_OUTPUT
+          Write-Host "Built $($dll.FullName) ($([math]::Round($dll.Length/1KB)) KB)"
+
+      - name: Upload .dll artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: selective_trace-${{ matrix.series }}-win64
+          path: ${{ steps.find.outputs.dll }}
+          if-no-files-found: error
