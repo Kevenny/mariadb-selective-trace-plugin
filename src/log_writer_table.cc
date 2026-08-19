@@ -58,6 +58,7 @@ static pthread_t writer_tid;
 
 static unsigned long insert_failures= 0;
 static unsigned long dropped_events= 0;
+static unsigned long reconnect_count= 0;
 static unsigned int last_logged_errno= 0;
 
 static MYSQL *conn= NULL;               /* writer thread only */
@@ -158,11 +159,23 @@ static void run_insert(const std::string &sql)
   }
 }
 
+/*
+  The writer keeps a single internal connection (and its THD) alive for the
+  whole plugin lifetime, reused for every queued INSERT. Under sustained
+  high-volume tracing that long-lived THD's memory is not returned to the OS
+  at a matching rate (freed but fragmented, not leaked: confirmed with
+  Valgrind, which reports 0 lost/reachable across a full run), so the
+  server's RSS climbs without bound and can end in an OOM kill. Recycling
+  the connection periodically bounds how much any single THD can accumulate.
+*/
+static const unsigned long RECONNECT_EVERY_N_INSERTS= 20000;
+
 static void *writer_thread_func(void *arg __attribute__((unused)))
 {
   my_thread_init();
 
   std::deque<std::string> batch;
+  unsigned long since_reconnect= 0;
   for (;;)
   {
     pthread_mutex_lock(&q_mutex);
@@ -182,6 +195,13 @@ static void *writer_thread_func(void *arg __attribute__((unused)))
       catch (...)
       {
         insert_failures++;
+      }
+
+      if (++since_reconnect >= RECONNECT_EVERY_N_INSERTS)
+      {
+        close_conn();
+        since_reconnect= 0;
+        reconnect_count++;
       }
     }
     batch.clear();
@@ -303,6 +323,11 @@ unsigned long table_writer_failures()
 unsigned long table_writer_dropped()
 {
   return dropped_events;
+}
+
+unsigned long table_writer_reconnects()
+{
+  return reconnect_count;
 }
 
 void sql_escape_append(std::string *out, const char *src, size_t len)

@@ -4,6 +4,25 @@ All notable changes to `selective_trace` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/), and the
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.2.2] - 2026-08-19
+
+### Fixed
+
+- **TABLE output mode: unbounded RSS growth under sustained load, ending in an
+  OOM kill.** The writer's single long-lived internal connection accumulated
+  heap fragmentation across millions of `INSERT`s (~11–12 KB/event, not a
+  pointer leak — confirmed with Valgrind: 0 bytes lost across a full clean
+  run). Reproduced: 1.5M events at concurrency 16 grew RSS from 212 MB to
+  17.8 GB. Fixed by recycling the writer's internal connection every 20,000
+  events; same reproduction now holds RSS flat around ~500 MB. New status
+  counter `Selective_trace_writer_reconnects`. `FILE` output was unaffected
+  and needed no change. Full root-cause writeup: docs/DECISIONS.md D26.
+
+  If you hit `Table was marked as crashed and should be repaired` for
+  `mysql.selective_trace_events` after an OOM/unclean shutdown on an older
+  version, run `REPAIR TABLE mysql.selective_trace_events;` — the table is
+  `Aria`/`TRANSACTIONAL=0` by design (fast, not crash-safe by itself).
+
 ## [1.2.1] - 2026-08-19
 
 ### Changed

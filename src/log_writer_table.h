@@ -53,6 +53,13 @@ bool table_writer_is_self();
 unsigned long table_writer_failures();
 unsigned long table_writer_dropped();
 
+/*
+  Count of times the writer has recycled its internal connection to bound
+  long-lived-THD memory growth (see the RECONNECT_EVERY_N_INSERTS comment
+  in log_writer_table.cc). Purely informational.
+*/
+unsigned long table_writer_reconnects();
+
 /* Append src as a SQL single-quoted string body (no quotes added). */
 void sql_escape_append(std::string *out, const char *src, size_t len);
 

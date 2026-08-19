@@ -503,3 +503,61 @@ the old names fails with "Unknown system variable". Hence the minor bump to
 rename is at least a minor). Migration is a mechanical `sed 's/_to_log//g'`
 over your config — see CHANGELOG.md. No behavior, output format, or table
 schema changed.
+
+## D26. Bug fix (v1.2.2): unbounded RSS growth in TABLE mode under sustained load
+
+Reported by a user running a sustained insert benchmark against `TABLE`
+output: `mariadbd` was OOM-killed after roughly 635k events, and
+`mysql.selective_trace_events` (Aria) came back marked as crashed after the
+unclean shutdown — the 145 error is a symptom of the crash, not the cause.
+
+**Reproduction** (MariaDB 11.4.4, `mariadb-slap`, `TABLE` output filtering one
+schema): a 500k-insert control run with the plugin disabled held RSS flat
+(228→262 MB); the same run in `FILE` mode also held flat (274→280 MB); the
+same run in `TABLE` mode grew RSS from 212 MB to **17.8 GB** over 1.5M events
+(~11–12 KB/event) and did not release it afterward.
+
+**Root cause.** `log_writer_table.cc`'s background writer thread keeps a
+single internal SQL-service connection (`mysql_real_connect_local`) — and
+its one long-lived server-side `THD` — alive for the plugin's entire
+lifetime, reused for every queued `INSERT`. The growth rate was identical at
+concurrency 1 and concurrency 16 (ruling out a per-thread/arena-multiplication
+effect), and `MALLOC_ARENA_MAX=1` did not cap it either (ruling out ordinary
+glibc arena fragmentation from concurrent frees). A Valgrind run across a full
+clean lifecycle (start → 6000 `TABLE`-mode inserts → drain → shutdown)
+reported **0 bytes definitely/indirectly lost, 0 still reachable** — so
+nothing is an unreachable pointer; every allocation is freed by a matching
+`free()`/`cleanup_after_query()` somewhere in that THD's lifetime. Consistent
+picture: it is heap fragmentation on a single very-long-lived THD, not a
+classic leak — freed blocks end up scattered among still-live ones on that
+THD's arena, so glibc keeps the pages resident instead of returning them to
+the OS, and RSS climbs monotonically until the OOM killer intervenes.
+`malloc_trim(0)` from the writer thread was tried and does not help (trim can
+only reclaim a contiguous run at the top of the heap; fragmented freed blocks
+lower down are not reclaimable that way).
+
+**Fix.** Recycle the writer's internal connection periodically:
+`writer_thread_func()` now closes it (`close_conn()`) every
+`RECONNECT_EVERY_N_INSERTS` (2×10⁴) processed events; `ensure_conn()`
+transparently reopens on the next `INSERT`, which is now a lazily-created
+short-lived THD instead of one that lives forever. This bounds how much any
+single THD can accumulate before being torn down. New informational status
+counter `Selective_trace_writer_reconnects` tracks how many times this has
+fired.
+
+**Verification.** Same 1.5M-event, concurrency-16 reproduction with the fix:
+RSS 108 MB → **486 MB**, flat for the remainder of the run (vs. 17.8 GB and
+climbing before the fix); 0 write failures, 0 dropped events, all 1.5M rows
+present in the log table. MTR and the existing Valgrind battery both still
+pass clean. `FILE` output was never affected (it writes synchronously on the
+query thread, no persistent internal connection) and needed no change.
+
+**Operational mitigation in the meantime** (documented for users on older
+binaries who cannot upgrade immediately): switch to `selective_trace_output
+= 'FILE'`, or lower exposure by narrowing the filters / raising
+`selective_trace_min_duration_ms`. `mysql.selective_trace_events` being
+marked crashed after an unclean shutdown is recovered with
+`REPAIR TABLE mysql.selective_trace_events;` (it is an `Aria`,
+`TRANSACTIONAL=0` table by design — see D12 — so it is not crash-safe by
+itself; `aria_recover_options` controls whether the server auto-repairs it on
+restart).
