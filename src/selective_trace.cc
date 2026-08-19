@@ -1,4 +1,4 @@
-/* Copyright (C) 2026 selective_trace plugin authors
+/* Copyright (C) 2026 Kevenny Ferraz
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -36,8 +36,8 @@
   the hot path only takes read locks, so queries never serialize.
 */
 
-#define PLUGIN_VERSION      0x0120
-#define PLUGIN_STR_VERSION  "1.2.0"
+#define PLUGIN_VERSION      0x0121
+#define PLUGIN_STR_VERSION  "1.2.1"
 
 #include <my_global.h>
 #include <my_pthread.h>
@@ -994,7 +994,7 @@ maria_declare_plugin(selective_trace)
   MYSQL_AUDIT_PLUGIN,
   &selective_trace_descriptor,
   "selective_trace",
-  "selective_trace plugin authors",
+  "Kevenny Ferraz",
   "Selective query tracing by schema/table/command",
   PLUGIN_LICENSE_GPL,
   selective_trace_init,

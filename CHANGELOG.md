@@ -4,6 +4,15 @@ All notable changes to `selective_trace` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/), and the
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.2.1] - 2026-08-19
+
+### Changed
+
+- Set the plugin author to **Kevenny Ferraz** (the `PLUGIN_AUTHOR` field shown
+  in `SHOW PLUGINS` / `information_schema.PLUGINS`) and updated the source-file
+  copyright headers accordingly. Metadata only — no behavior, output, or ABI
+  change.
+
 ## [1.2.0] - 2026-08-06
 
 ### Added
