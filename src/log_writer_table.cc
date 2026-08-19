@@ -27,6 +27,9 @@ namespace selective_trace {
 
 #define LOG_TABLE_FQN "mysql.selective_trace_events"
 
+static const char REPAIR_LOG_TABLE_SQL[]=
+  "REPAIR TABLE " LOG_TABLE_FQN;
+
 static const char CREATE_LOG_TABLE_SQL[]=
   "CREATE TABLE IF NOT EXISTS " LOG_TABLE_FQN " ("
   " `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,"
@@ -59,6 +62,7 @@ static pthread_t writer_tid;
 static unsigned long insert_failures= 0;
 static unsigned long dropped_events= 0;
 static unsigned long reconnect_count= 0;
+static unsigned long repair_count= 0;
 static unsigned int last_logged_errno= 0;
 
 static MYSQL *conn= NULL;               /* writer thread only */
@@ -138,6 +142,34 @@ static void run_insert(const std::string &sql)
                      (unsigned long) (sizeof(CREATE_LOG_TABLE_SQL) - 1));
     if (mysql_real_query(conn, sql.data(), (unsigned long) sql.size()) == 0)
       return;
+    err= mysql_errno(conn);
+  }
+  /*
+    The log table is Aria/TRANSACTIONAL=0 (fast, not crash-safe), so an
+    unclean server shutdown can leave it marked as crashed. Without this,
+    every later INSERT failed forever and tracing silently stopped writing
+    until a human ran REPAIR by hand — surviving even UNINSTALL/INSTALL,
+    since the damage is on disk, not in plugin state.
+
+    Note these are the *raw* handler codes (my_base.h HA_ERR_CRASHED &
+    friends), which is what actually reaches the client here — not the
+    mapped ER_CRASHED_ON_USAGE/1194 one might expect. Verified against a
+    deliberately corrupted Aria index: the writer sees errno 144/145.
+  */
+  else if (err == 126 || err == 127 || err == 144 || err == 145 ||
+           err == 180 || err == 1194 || err == 1195 || err == 1034)
+  {
+    if (mysql_real_query(conn, REPAIR_LOG_TABLE_SQL,
+                         (unsigned long) (sizeof(REPAIR_LOG_TABLE_SQL) - 1)) == 0)
+    {
+      /* REPAIR returns a result set; drain it or the connection desyncs. */
+      MYSQL_RES *res= mysql_store_result(conn);
+      if (res != NULL)
+        mysql_free_result(res);
+      repair_count++;
+      if (mysql_real_query(conn, sql.data(), (unsigned long) sql.size()) == 0)
+        return;
+    }
     err= mysql_errno(conn);
   }
   else if (err == 2006 || err == 2013)  /* connection gone: retry once */
@@ -328,6 +360,11 @@ unsigned long table_writer_dropped()
 unsigned long table_writer_reconnects()
 {
   return reconnect_count;
+}
+
+unsigned long table_writer_repairs()
+{
+  return repair_count;
 }
 
 void sql_escape_append(std::string *out, const char *src, size_t len)

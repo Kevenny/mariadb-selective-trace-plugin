@@ -4,6 +4,38 @@ All notable changes to `selective_trace` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/), and the
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.2.3] - 2026-08-19
+
+### Fixed
+
+- **TABLE output silently stopped writing after the log table was left in a
+  crashed state, and never recovered — not even across `enabled=OFF/ON` or
+  `UNINSTALL`/`INSTALL PLUGIN`.** The writer only knew how to recover from a
+  *missing* table or a dropped connection; a corrupted one (common after the
+  OOM crash fixed in 1.2.2, since the log table is `Aria`/`TRANSACTIONAL=0` and
+  not crash-safe) made every INSERT fail forever. It looked healthy from the
+  outside because `Selective_trace_events_logged` counts enqueued events, not
+  committed rows.
+
+  The writer now issues `REPAIR TABLE` and retries when it sees a
+  corrupted-table error. Note these arrive as *raw handler* codes (144/145/126/
+  127/180), not the mapped `ER_CRASHED_ON_USAGE` (1194) one might expect — a
+  fix written against the mapped codes alone would not have covered the
+  reported case. New status counter `Selective_trace_table_repairs`; a non-zero
+  value means the server did not shut down cleanly at some point.
+
+  Conditions that need an operator decision — table full (1114), permissions,
+  schema mismatch after someone `ALTER`s the log table — are still only counted
+  and logged, never "fixed" by dropping data. Those resume on their own once
+  resolved externally. Details: docs/DECISIONS.md D27.
+
+### Verified
+
+- Toggling `selective_trace_enabled` OFF/ON is **not** itself affected: it
+  works correctly standalone, within a single persistent session, and across
+  repeated toggles under concurrent load (collection resumed every cycle, RSS
+  flat, 0 write failures, 0 dropped events).
+
 ## [1.2.2] - 2026-08-19
 
 ### Fixed

@@ -60,6 +60,14 @@ unsigned long table_writer_dropped();
 */
 unsigned long table_writer_reconnects();
 
+/*
+  Count of automatic REPAIR TABLE recoveries after the log table was found
+  marked as crashed (the table is Aria/TRANSACTIONAL=0, so an unclean
+  shutdown can corrupt it). A non-zero value is worth investigating: it
+  means the server did not shut down cleanly at some point.
+*/
+unsigned long table_writer_repairs();
+
 /* Append src as a SQL single-quoted string body (no quotes added). */
 void sql_escape_append(std::string *out, const char *src, size_t len);
 

@@ -300,6 +300,20 @@ How it works under the hood:
 | `Selective_trace_write_failures` | Write failures (file + table) |
 | `Selective_trace_events_dropped` | Events dropped due to a full queue (TABLE mode) |
 | `Selective_trace_callback_errors` | Exceptions swallowed at the C boundaries (memory pressure/bug) |
+| `Selective_trace_writer_reconnects` | Internal writer connection recycled (TABLE mode; routine, grows with volume) |
+| `Selective_trace_table_repairs` | Automatic `REPAIR TABLE` of the log table after it was found crashed |
+
+> **In TABLE mode, `Selective_trace_events_logged` counts events *queued*, not
+> rows committed.** If it keeps climbing while `SELECT COUNT(*) FROM
+> mysql.selective_trace_events` does not, check `Selective_trace_write_failures`
+> and the server error log — the writer reports the failing errno there.
+>
+> A non-zero `Selective_trace_table_repairs` means the log table was found
+> marked as crashed and repaired automatically. That is a symptom of an unclean
+> server shutdown, worth investigating even though tracing recovered. The log
+> table is `Aria`/`TRANSACTIONAL=0` by design (fast, not crash-safe); if you
+> need it to survive crashes untouched, `ALTER TABLE
+> mysql.selective_trace_events TRANSACTIONAL=1` at some write cost.
 
 ## 6. Known limitations
 

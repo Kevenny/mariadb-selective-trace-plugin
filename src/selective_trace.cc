@@ -36,8 +36,8 @@
   the hot path only takes read locks, so queries never serialize.
 */
 
-#define PLUGIN_VERSION      0x0122
-#define PLUGIN_STR_VERSION  "1.2.2"
+#define PLUGIN_VERSION      0x0123
+#define PLUGIN_STR_VERSION  "1.2.3"
 
 #include <my_global.h>
 #include <my_pthread.h>
@@ -469,6 +469,23 @@ static int show_writer_reconnects(MYSQL_THD thd __attribute__((unused)),
   return 0;
 }
 
+static ulong status_table_repairs= 0;
+
+static int show_table_repairs(MYSQL_THD thd __attribute__((unused)),
+                              struct st_mysql_show_var *var,
+                              void *buff,
+                              struct system_status_var *status
+                                __attribute__((unused)),
+                              enum enum_var_type scope
+                                __attribute__((unused)))
+{
+  status_table_repairs= selective_trace::table_writer_repairs();
+  var->type= SHOW_ULONG;
+  var->value= (char *) &status_table_repairs;
+  (void) buff;
+  return 0;
+}
+
 static struct st_mysql_show_var selective_trace_status[]=
 {
   { "selective_trace_events_logged", (char *) &status_events_logged,
@@ -476,6 +493,7 @@ static struct st_mysql_show_var selective_trace_status[]=
   SHOW_FUNC_ENTRY("selective_trace_write_failures", show_write_failures),
   SHOW_FUNC_ENTRY("selective_trace_events_dropped", show_events_dropped),
   SHOW_FUNC_ENTRY("selective_trace_writer_reconnects", show_writer_reconnects),
+  SHOW_FUNC_ENTRY("selective_trace_table_repairs", show_table_repairs),
   { "selective_trace_callback_errors", (char *) &status_callback_errors,
     SHOW_ULONG },
   { 0, 0, SHOW_UNDEF }

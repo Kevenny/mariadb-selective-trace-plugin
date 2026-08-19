@@ -561,3 +561,59 @@ marked crashed after an unclean shutdown is recovered with
 `TRANSACTIONAL=0` table by design — see D12 — so it is not crash-safe by
 itself; `aria_recover_options` controls whether the server auto-repairs it on
 restart).
+
+## D27. Bug fix (v1.2.3): TABLE writer stuck forever on a crashed log table
+
+Reported as "after toggling `selective_trace_enabled` OFF and ON it stops
+collecting / stops writing to the table". Investigation showed the toggle
+itself is not at fault — ON/OFF/ON works correctly, including within a single
+persistent session and under concurrent load. The real failure is stickier and
+was reachable from the OOM crash fixed in D26.
+
+**What happens.** `run_insert()` only recovered from two classes of failure:
+`1146/1049` (table or schema went missing → recreate the table) and
+`2006/2013` (connection gone → reconnect). *Every other* INSERT error just
+incremented `insert_failures` and moved on, with no retry strategy. The log
+table is `Aria`/`TRANSACTIONAL=0` (D12: chosen for write speed, explicitly not
+crash-safe), so any unclean shutdown — such as the OOM kill from D26 — can
+leave it marked as crashed. From that moment every INSERT failed forever and
+tracing silently wrote nothing, while `Selective_trace_events_logged` kept
+climbing (it counts *enqueued* events, not committed rows), so the plugin
+looked healthy from the outside. Because the damage is on disk rather than in
+plugin state, this survived not only `enabled=OFF/ON` but even
+`UNINSTALL`/`INSTALL PLUGIN` — matching the reported symptom exactly.
+
+**Error codes.** The codes that actually reach the writer are the *raw handler*
+values from `include/my_base.h`, not the mapped `ER_CRASHED_ON_USAGE` (1194)
+one would expect: verified against a deliberately corrupted Aria index, the
+writer observes errno **144** (`HA_ERR_CRASHED_ON_REPAIR`), and the user's
+server reported **145** (`HA_ERR_CRASHED_ON_USAGE`). An implementation written
+against the mapped codes alone would not have fixed the reported case.
+
+**Fix.** `run_insert()` gains a recovery branch for corrupted-table errors
+(126, 127, 144, 145, 180, plus the mapped 1034/1194/1195): it issues
+`REPAIR TABLE mysql.selective_trace_events`, drains the result set that REPAIR
+returns (otherwise the connection desyncs and every later query fails), and
+retries the INSERT once. This is the natural counterpart to the existing
+"recreate if missing" branch. New status counter
+`Selective_trace_table_repairs` — a non-zero value is a signal that the server
+did not shut down cleanly at some point, so it is worth surfacing rather than
+repairing silently.
+
+**Deliberately not auto-recovered.** Errors that represent a real operator
+decision are still only counted and logged once: `1114` (table is full),
+permission problems, and schema mismatches (e.g. `1054` after someone
+`ALTER`s the log table). Silently dropping or rebuilding a table holding user
+data to clear those would be more dangerous than stopping. Confirmed by test
+that once such a condition is resolved externally, the writer resumes on its
+own with no restart — the retry is per-INSERT, so there is no stuck state to
+clear.
+
+**Verification.** Corrupted an Aria index on disk to put the log table into a
+genuine crashed state (errno 144) with `aria_recover_options=OFF`: before the
+fix, writes failed indefinitely and survived UNINSTALL/INSTALL; after the fix,
+the writer repaired the table automatically (`CHECK TABLE` → OK, counter at 1)
+and the connection stayed usable. Separately verified that ON/OFF toggling
+under concurrent load keeps collecting across every cycle (rows 29k → 181k over
+six toggles) with RSS flat, that a healthy table resumes writes immediately,
+and that MTR and the Valgrind battery still pass clean.
