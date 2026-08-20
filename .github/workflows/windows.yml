@@ -24,19 +24,26 @@ concurrency:
 jobs:
   build-windows:
     name: Build .dll (MariaDB ${{ matrix.series }})
-    runs-on: windows-2022
+    runs-on: windows-latest
     strategy:
       fail-fast: false
       matrix:
         # One .dll per server series: the audit ABI differs (0x0302 on 11.4 vs
         # 0x0303 on 12.3), so a 11.4 .dll will not load on a 12.3 server.
         series: ['11.4.4', '12.3.2']
-    env:
-      MARIADB_SRC: ${{ runner.temp }}\mariadb-src
-      MARIADB_BUILD: ${{ runner.temp }}\mariadb-build
     steps:
       - name: Checkout plugin
         uses: actions/checkout@v5
+
+      # RUNNER_TEMP is only reachable from inside a step: the `runner` context
+      # is not one of the contexts allowed in a job-level `env:` block, and
+      # referencing it there makes GitHub reject the whole workflow before it
+      # creates any job. Export the paths once here instead.
+      - name: Set build paths
+        shell: pwsh
+        run: |
+          "MARIADB_SRC=$env:RUNNER_TEMP\mariadb-src"     >> $env:GITHUB_ENV
+          "MARIADB_BUILD=$env:RUNNER_TEMP\mariadb-build" >> $env:GITHUB_ENV
 
       # MariaDB's parser is generated at build time from sql_yacc.yy; the git
       # source (unlike the release tarball) ships no pre-generated parser, so a
