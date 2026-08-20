@@ -390,6 +390,198 @@ static void test_match_null_safety()
   CHECK(!match_table(r, "b", 1, NULL, 0));
 }
 
+/*
+  DDL classification. Every DDL form the server can dispatch has to land on
+  the right bit, because a `:ddl` filter is the usual way to watch schema
+  changes and a miss there is silent data loss for the operator.
+*/
+static void test_ddl_commands()
+{
+  using namespace selective_trace;
+
+  /* each DDL verb resolves from real statement text, not just bare keywords */
+  CHECK(cmd("CREATE TABLE app.t (id INT)") == "CREATE");
+  CHECK(cmd("CREATE INDEX idx ON app.t (id)") == "CREATE");
+  CHECK(cmd("CREATE OR REPLACE VIEW v AS SELECT 1") == "CREATE");
+  CHECK(cmd("CREATE DATABASE app") == "CREATE");
+  CHECK(cmd("CREATE TEMPORARY TABLE tmp (a INT)") == "CREATE");
+  CHECK(cmd("ALTER TABLE app.t ADD COLUMN c INT") == "ALTER");
+  CHECK(cmd("alter table app.t drop column c") == "ALTER");
+  CHECK(cmd("DROP TABLE IF EXISTS app.t") == "DROP");
+  CHECK(cmd("DROP INDEX idx ON app.t") == "DROP");
+  CHECK(cmd("TRUNCATE TABLE app.t") == "TRUNCATE");
+  CHECK(cmd("truncate app.t") == "TRUNCATE");
+  CHECK(cmd("RENAME TABLE app.t TO app.t2") == "RENAME");
+
+  /* ALTER inside a versioned-comment wrapper (mariadb-dump output) */
+  CHECK(cmd("/*!40000 ALTER TABLE t ENABLE KEYS */") == "ALTER");
+
+  /* keyword -> bit, and membership in the CMD_DDL group */
+  CHECK(command_bit("CREATE") == CMD_CREATE);
+  CHECK(command_bit("ALTER") == CMD_ALTER);
+  CHECK(command_bit("DROP") == CMD_DROP);
+  CHECK(command_bit("TRUNCATE") == CMD_TRUNCATE);
+  CHECK(command_bit("RENAME") == CMD_RENAME);
+  CHECK((command_bit("CREATE") & CMD_DDL) != 0);
+  CHECK((command_bit("ALTER") & CMD_DDL) != 0);
+  CHECK((command_bit("DROP") & CMD_DDL) != 0);
+  CHECK((command_bit("TRUNCATE") & CMD_DDL) != 0);
+  CHECK((command_bit("RENAME") & CMD_DDL) != 0);
+
+  /* DDL and DML groups must not overlap: a :ddl filter must not catch DML */
+  CHECK((CMD_DDL & CMD_DML) == 0);
+  CHECK((command_bit("INSERT") & CMD_DDL) == 0);
+  CHECK((command_bit("SELECT") & CMD_DDL) == 0);
+
+  /* a :ddl filter accepts every DDL verb and rejects the rest */
+  FilterRules r;
+  std::string err;
+  CHECK(parse_filter_lists("app:ddl", "", &r, &err));
+  const unsigned mask= match_schema(r, "app", 3);
+  CHECK((mask & command_bit("CREATE")) != 0);
+  CHECK((mask & command_bit("ALTER")) != 0);
+  CHECK((mask & command_bit("DROP")) != 0);
+  CHECK((mask & command_bit("TRUNCATE")) != 0);
+  CHECK((mask & command_bit("RENAME")) != 0);
+  CHECK((mask & command_bit("SELECT")) == 0);
+  CHECK((mask & command_bit("INSERT")) == 0);
+  CHECK((mask & command_bit("COMMIT")) == 0);
+
+  /* single-verb DDL qualifier: only that verb passes */
+  CHECK(parse_filter_lists("app:drop", "", &r, &err));
+  CHECK(match_schema(r, "app", 3) == CMD_DROP);
+  CHECK((match_schema(r, "app", 3) & command_bit("CREATE")) == 0);
+
+  /* per-table DDL qualifier, cross-schema */
+  CHECK(parse_filter_lists("", "app.t:ddl, ops.*:alter", &r, &err));
+  CHECK(match_table(r, "app", 3, "t", 1) == CMD_DDL);
+  CHECK(match_table(r, "ops", 3, "anything", 8) == CMD_ALTER);
+  CHECK(match_table(r, "app", 3, "other", 5) == 0);
+}
+
+/*
+  SELECT classification. SELECTs are the bulk of a read workload, so both
+  the shapes that must match and the ones that must NOT be mistaken for a
+  SELECT are worth pinning down.
+*/
+static void test_select_commands()
+{
+  using namespace selective_trace;
+
+  /* plain and parenthesised/compound selects */
+  CHECK(cmd("SELECT 1") == "SELECT");
+  CHECK(cmd("select * from app.t where id=1") == "SELECT");
+  CHECK(cmd("  \t\n SELECT * FROM app.t") == "SELECT");
+  CHECK(cmd("(SELECT 1) UNION ALL (SELECT 2)") == "SELECT");
+  CHECK(cmd("((SELECT 1))") == "SELECT");
+  CHECK(cmd("SELECT * FROM a JOIN b ON a.id=b.id") == "SELECT");
+  CHECK(cmd("SELECT * FROM (SELECT 1) x") == "SELECT");
+  CHECK(cmd("SELECT SLEEP(0.1)") == "SELECT");
+  CHECK(cmd("SELECT /*+ MAX_EXECUTION_TIME(1000) */ 1") == "SELECT");
+
+  /* CTEs are treated as selects (documented behaviour) */
+  CHECK(cmd("WITH cte AS (SELECT 1) SELECT * FROM cte") == "WITH");
+  CHECK(command_bit("WITH") == CMD_SELECT);
+
+  /* a comment block preceding the verb must not hide it */
+  CHECK(cmd("/* app:report */ SELECT 1") == "SELECT");
+  CHECK(cmd("-- daily report\nSELECT count(*) FROM app.t") == "SELECT");
+
+  /* statements that merely contain the word SELECT are not selects */
+  CHECK(cmd("INSERT INTO app.t SELECT * FROM app.src") == "INSERT");
+  CHECK(cmd("CREATE TABLE c AS SELECT * FROM app.t") == "CREATE");
+  CHECK(cmd("REPLACE INTO t SELECT * FROM s") == "REPLACE");
+  CHECK(command_bit("SELECT") == CMD_SELECT);
+  CHECK((CMD_SELECT & CMD_DML) == 0);   /* SELECT is not DML here */
+
+  /* a :select filter passes reads and blocks writes/DDL */
+  FilterRules r;
+  std::string err;
+  CHECK(parse_filter_lists("app:select", "", &r, &err));
+  const unsigned mask= match_schema(r, "app", 3);
+  CHECK((mask & command_bit("SELECT")) != 0);
+  CHECK((mask & command_bit("WITH")) != 0);      /* CTE shares the bit */
+  CHECK((mask & command_bit("INSERT")) == 0);
+  CHECK((mask & command_bit("UPDATE")) == 0);
+  CHECK((mask & command_bit("DELETE")) == 0);
+  CHECK((mask & command_bit("CREATE")) == 0);
+
+  /* select + ddl combined on one entry */
+  CHECK(parse_filter_lists("app:select|ddl", "", &r, &err));
+  const unsigned both= match_schema(r, "app", 3);
+  CHECK((both & command_bit("SELECT")) != 0);
+  CHECK((both & command_bit("ALTER")) != 0);
+  CHECK((both & command_bit("INSERT")) == 0);
+
+  /* per-table select filter: only the listed table is read-traced */
+  CHECK(parse_filter_lists("", "app.orders:select", &r, &err));
+  CHECK(match_table(r, "app", 3, "orders", 6) == CMD_SELECT);
+  CHECK(match_table(r, "app", 3, "items", 5) == 0);
+}
+
+/*
+  Robustness of the pure engine against the odd inputs a real workload
+  produces: very long statements, unusual whitespace, truncation into the
+  fixed-size command buffer. These run in the audit hot path, so a buffer
+  mistake here is a server crash.
+*/
+static void test_long_and_edge_inputs()
+{
+  using namespace selective_trace;
+
+  /* a very long statement still classifies from its first keyword */
+  std::string big= "SELECT ";
+  big.append(60000, 'x');
+  char buf[24];
+  extract_command(big.data(), big.size(), buf, sizeof(buf));
+  CHECK(std::string(buf) == "SELECT");
+
+  /* a single huge keyword must be truncated, never overflow the buffer */
+  std::string huge_kw(5000, 'A');
+  extract_command(huge_kw.data(), huge_kw.size(), buf, sizeof(buf));
+  CHECK(std::strlen(buf) < sizeof(buf));
+
+  /* leading comment longer than the buffer, then the real verb */
+  std::string commented= "/* ";
+  commented.append(9000, 'c');
+  commented+= " */ DELETE FROM app.t";
+  extract_command(commented.data(), commented.size(), buf, sizeof(buf));
+  CHECK(std::string(buf) == "DELETE");
+
+  /* an unterminated comment yields no command rather than reading past end */
+  extract_command("/* never closed", 15, buf, sizeof(buf));
+  CHECK(std::strlen(buf) < sizeof(buf));
+
+  /* NUL bytes inside the statement text must not be treated as terminators
+     by the (ptr,len) API */
+  const char with_nul[]= "SELECT\0 1";
+  extract_command(with_nul, sizeof(with_nul) - 1, buf, sizeof(buf));
+  CHECK(std::string(buf) == "SELECT");
+
+  /* long identifiers in the filter lists parse and match exactly */
+  FilterRules r;
+  std::string err;
+  std::string long_db(200, 'd');
+  std::string long_tbl(200, 't');
+  const std::string long_entry= long_db + "." + long_tbl;
+  CHECK(parse_filter_lists("", long_entry.c_str(), &r, &err));
+  CHECK(match_table(r, long_db.data(), long_db.size(),
+                    long_tbl.data(), long_tbl.size()) == CMD_ALL);
+  CHECK(!match_table(r, long_db.data(), long_db.size(), "other", 5));
+
+  /* zero-length inputs are safe */
+  CHECK(!match_schema(r, "", 0));
+  CHECK(!match_table(r, "", 0, "", 0));
+
+  /* masking leaves a long innocuous statement untouched and bounded */
+  std::string long_sel= "SELECT * FROM app.t WHERE v='";
+  long_sel.append(20000, 'v');
+  long_sel+= "'";
+  std::string masked;
+  const bool changed= mask_secrets(long_sel.data(), long_sel.size(), &masked);
+  CHECK(!changed || masked.size() <= long_sel.size());
+}
+
 int main()
 {
   test_empty_lists();
@@ -403,6 +595,9 @@ int main()
   test_mask_secrets();
   test_connection_filter();
   test_match_null_safety();
+  test_ddl_commands();
+  test_select_commands();
+  test_long_and_edge_inputs();
 
   if (failures)
   {

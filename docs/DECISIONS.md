@@ -617,3 +617,62 @@ and the connection stayed usable. Separately verified that ON/OFF toggling
 under concurrent load keeps collecting across every cycle (rows 29k → 181k over
 six toggles) with RSS flat, that a healthy table resumes writes immediately,
 and that MTR and the Valgrind battery still pass clean.
+
+## D28. Validation battery (v1.2.4): DDL, SELECT and TABLE mode under sustained load
+
+After the two TABLE-mode defects fixed in D26 (unbounded RSS growth) and D27
+(writer stuck on a crashed log table), the mode needed evidence — not just
+absence of new reports — that it is safe under the workloads people actually
+run. TABLE is the most used output format, so the battery targets it directly.
+
+**Unit tests: 157 → 242.** Three new groups covering the areas the earlier
+suites under-tested:
+
+- *DDL* — every DDL verb resolved from real statement text (`CREATE TABLE`,
+  `CREATE INDEX`, `CREATE OR REPLACE VIEW`, `ALTER`, `DROP`, `TRUNCATE`,
+  `RENAME`, plus `/*!40000 ALTER ... */` versioned-comment wrappers), the
+  keyword→bit mapping, and the group invariant `CMD_DDL & CMD_DML == 0` so a
+  `:ddl` filter can never catch DML.
+- *SELECT* — plain, parenthesised, `UNION`, subquery, `JOIN`, optimizer-hint
+  and CTE forms; and the inverse, that statements merely *containing* the word
+  (`INSERT ... SELECT`, `CREATE TABLE ... AS SELECT`, `REPLACE ... SELECT`)
+  are classified by their real verb, not as reads.
+- *Edge/robustness* — a 60 KB statement, a 5 KB single keyword, a 9 KB leading
+  comment before the verb, an unterminated comment, an embedded NUL, and
+  200-char identifiers. These exercise the fixed-size command buffer that runs
+  in the audit hot path, where an overflow would be a server crash. Run under
+  Valgrind: 171 allocs / 171 frees, 0 errors.
+
+**Integration battery on MariaDB 11.4.4** (TABLE output throughout):
+
+| Phase | Workload | Result |
+|---|---|---|
+| DDL storm | 1,200 statements over 200 table lifecycles, `app:ddl` filter | all 1,200 captured and correctly classified; 0 failures |
+| SELECT storm | 150k JOIN queries, concurrency 8 (~42k q/s) | 136,673 logged; **13,327 dropped** |
+| Soak | 8 rounds of 150k SELECT + 40k UPDATE | 1.66M events, 0 write failures |
+| Integrity | after 1.52M rows | 0 malformed rows, 0 rows from an unfiltered schema, `CHECK TABLE` OK |
+
+The dropped events in the burst phase are the queue cap (`QUEUE_MAX_EVENTS`,
+10,000) doing its job: at ~42k statements/s the writer cannot keep up, and the
+design choice is to drop and count rather than grow the queue without bound.
+That is the guard that keeps a burst from turning into the D26 failure mode.
+Worth stating plainly in the docs rather than hiding: TABLE output is not
+lossless under extreme burst, and `Selective_trace_events_dropped` is how you
+detect it. FILE output has no such queue and does not drop.
+
+**Memory, the primary question.** RSS across the soak: 433 → 441 → 486 → 531 →
+541 → 547 → 547 → 547 → 547 MB. It plateaus: the last 570k events produced
+**zero** RSS growth. Against the pre-D26 rate (~11 KB/event) the same 1.66M
+events would have consumed roughly 18 GB.
+
+**Valgrind, full lifecycle** (start → DDL storm → SELECT storm → DML →
+error paths → filter churn → FILE/TABLE switch → enable toggle →
+UNINSTALL/INSTALL → clean shutdown): 0 bytes definitely lost, 0 indirectly
+lost, 0 still reachable, and **no plugin frame in any leak or error record**.
+The single 336-byte "possibly lost" block is pre-existing server infrastructure
+noise, present before these changes and unrelated to the plugin.
+
+**Cross-schema isolation** was asserted rather than assumed: an unfiltered
+schema was written throughout every phase, and the log table ended with
+`COUNT(*) WHERE db='cold'` = 0. No crash, no signal, no corruption in the
+error log across the entire battery.

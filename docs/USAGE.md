@@ -287,7 +287,14 @@ How it works under the hood:
   (up to 10000 events) and runs the INSERTs on an internal connection with
   `sql_log_bin=0` (does not replicate). Events may take a few ms to appear.
 - If the queue fills up (burst above the INSERT throughput), events are
-  dropped and counted in `Selective_trace_events_dropped`.
+  dropped and counted in `Selective_trace_events_dropped`. **TABLE output is
+  therefore not lossless under an extreme burst**: measured on 11.4.4, a
+  150k-query run at ~42k statements/s dropped ~13k events, because the writer
+  cannot INSERT that fast. Dropping is deliberate — it is what stops a burst
+  from growing the queue without bound. If you need every statement captured
+  at that rate, use `FILE` output, which writes synchronously and has no queue.
+- If the table is left marked as crashed by an unclean shutdown, the writer
+  repairs it automatically and counts it in `Selective_trace_table_repairs`.
 - The plugin **never logs its own INSERTs** (per-thread reentrancy guard) —
   no self-log loop, even with `mysql` in the filter.
 - If the table is dropped, it is recreated on the next INSERT.

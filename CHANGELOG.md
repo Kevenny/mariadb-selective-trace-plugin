@@ -4,6 +4,40 @@ All notable changes to `selective_trace` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/), and the
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.2.4] - 2026-08-20
+
+### Added
+
+- **Unit tests expanded from 157 to 242**, covering DDL classification (every
+  DDL verb from real statement text, including versioned-comment wrappers, and
+  the invariant that a `:ddl` filter can never match DML), SELECT
+  classification (`UNION`/subquery/`JOIN`/CTE/hint forms, and that
+  `INSERT ... SELECT` or `CREATE TABLE ... AS SELECT` are *not* reads), and
+  edge/robustness inputs against the fixed-size command buffer in the audit
+  hot path (60 KB statement, 5 KB keyword, 9 KB leading comment, unterminated
+  comment, embedded NUL, 200-char identifiers).
+
+### Verified (no code change required)
+
+Full TABLE-mode battery on MariaDB 11.4.4 — see docs/DECISIONS.md D28:
+
+- 1,200-statement DDL storm: all captured and correctly classified.
+- 1.66M-event soak (SELECT + JOIN + UPDATE, concurrency 8): **RSS plateaus at
+  547 MB** — the final 570k events produced zero RSS growth. 0 write failures.
+- 1.52M rows written: 0 malformed, 0 from an unfiltered schema, `CHECK TABLE`
+  OK, no crash or signal in the error log.
+- Valgrind over the full lifecycle (DDL + SELECT + DML + error paths + filter
+  churn + FILE/TABLE switch + toggle + UNINSTALL/INSTALL): 0 bytes lost, 0
+  still reachable, no plugin frame in any record.
+
+### Note on burst behaviour
+
+Under an extreme burst (~42k statements/s) the TABLE writer cannot keep up and
+the queue cap (10,000 events) drops the excess, counted in
+`Selective_trace_events_dropped`. This is deliberate backpressure — dropping is
+what prevents the unbounded growth fixed in 1.2.2. **TABLE output is not
+lossless under extreme burst**; `FILE` output has no queue and does not drop.
+
 ## [1.2.3] - 2026-08-19
 
 ### Fixed
