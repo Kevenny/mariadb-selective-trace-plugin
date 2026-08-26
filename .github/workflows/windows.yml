@@ -77,11 +77,22 @@ jobs:
           Copy-Item -Recurse -Force "${{ github.workspace }}\src" `
             "$env:MARIADB_SRC\plugin\selective_trace"
 
+      - name: Show toolchain versions
+        shell: pwsh
+        run: |
+          cmake --version
+          Write-Host "bison: ${{ steps.bison.outputs.path }}"
+
+      # CMAKE_POLICY_VERSION_MINIMUM: CMake 4 (on the windows-latest image)
+      # removed compatibility with the `cmake_minimum_required(VERSION <3.5)`
+      # that the MariaDB tree still declares, turning what is only a
+      # deprecation warning under CMake 3.x into a hard configure error.
       - name: Configure (CMake · Visual Studio 2022 · x64)
         shell: pwsh
         run: |
           cmake -S "$env:MARIADB_SRC" -B "$env:MARIADB_BUILD" `
             -G "Visual Studio 17 2022" -A x64 `
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 `
             -DBISON_EXECUTABLE="${{ steps.bison.outputs.path }}" `
             -DPLUGIN_SELECTIVE_TRACE=DYNAMIC `
             -DWITH_SSL=bundled `
@@ -90,6 +101,28 @@ jobs:
             -DWITHOUT_TOKUDB=1 -DWITHOUT_MROONGA=1 -DWITHOUT_ROCKSDB=1 `
             -DWITHOUT_OQGRAPH=1 -DWITHOUT_SPHINX=1 -DWITHOUT_COLUMNSTORE=1 `
             -DWITHOUT_SPIDER=1
+
+      # Without this, a configure failure surfaces only as "exit code 1" in the
+      # API/annotations and the actual CMake diagnostics are lost.
+      - name: Dump CMake diagnostics on failure
+        if: failure()
+        shell: pwsh
+        run: |
+          foreach ($f in 'CMakeOutput.log','CMakeError.log','CMakeConfigureLog.yaml') {
+            $p = Join-Path "$env:MARIADB_BUILD" "CMakeFiles\$f"
+            if (Test-Path $p) {
+              Write-Host "===== $f (last 120 lines) ====="
+              Get-Content $p -Tail 120
+            }
+          }
+
+      - name: Upload CMake logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cmake-logs-${{ matrix.series }}
+          path: ${{ env.MARIADB_BUILD }}/CMakeFiles/*.log
+          if-no-files-found: ignore
 
       # Building the DYNAMIC plugin target transitively builds the server bits it
       # links against (the import library), which is the bulk of the time.
