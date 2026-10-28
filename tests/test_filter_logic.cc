@@ -143,6 +143,71 @@ static void test_wildcard()
   CHECK(!m_table(r, "logsx", "t"));
 }
 
+static void test_all_schemas_wildcard()
+{
+  using namespace selective_trace;
+  FilterRules r;
+  std::string err;
+
+  /* bare "*": matches any schema, does not land in r.schemas */
+  CHECK(parse_filter_lists("*", "", &r, &err));
+  CHECK(r.schemas.empty());
+  CHECK(r.all_schemas_cmds == CMD_ALL);
+  CHECK(!r.empty());                       /* fail-safe: "*" alone counts */
+  CHECK(match_schema(r, "anything", 8) == CMD_ALL);
+  CHECK(match_schema(r, "mysql", 5) == CMD_ALL);
+  CHECK(match_schema(r, "", 0) == 0);       /* no current schema: no match */
+
+  /* qualifier restricts it, same syntax as a named schema: counting
+     INSERT/UPDATE/DELETE across every schema on the server */
+  CHECK(parse_filter_lists("*:dml", "", &r, &err));
+  CHECK(match_schema(r, "db1", 3) == CMD_DML);
+  CHECK(match_schema(r, "db2", 3) == CMD_DML);
+  CHECK(command_bit("INSERT") & match_schema(r, "anydb", 5));
+  CHECK(!(command_bit("SELECT") & match_schema(r, "anydb", 5)));
+
+  CHECK(parse_filter_lists("*:insert|update|delete", "", &r, &err));
+  CHECK(match_schema(r, "x", 1) == (CMD_INSERT | CMD_UPDATE | CMD_DELETE));
+
+  /* "*" plus named schemas: both apply, independently */
+  CHECK(parse_filter_lists("*:select, vendas:insert", "", &r, &err));
+  CHECK(r.schemas.size() == 1);
+  CHECK(match_schema(r, "vendas", 6) == (CMD_SELECT | CMD_INSERT));
+  CHECK(match_schema(r, "other", 5) == CMD_SELECT);
+
+  /* duplicated "*" entries merge masks, like any other entry */
+  CHECK(parse_filter_lists("*:insert, *:update", "", &r, &err));
+  CHECK(match_schema(r, "x", 1) == (CMD_INSERT | CMD_UPDATE));
+
+  /* table-level match is unaffected by the schema-level "*": it still
+     only looks at wildcard_schemas (schema.*) and explicit schema.table
+     entries. The server combines match_table and match_schema itself
+     (see handle_table_event), so "*" still ends up covering every table
+     of every schema in the plugin as a whole. */
+  CHECK(parse_filter_lists("*", "", &r, &err));
+  CHECK(match_table(r, "anydb", 5, "anytable", 8) == 0);
+
+  /* "*" is only special in the schemas list; in tables it is just a
+     literal (never-matching) identifier, not a cross-schema wildcard */
+  CHECK(parse_filter_lists("", "*.orders", &r, &err));
+  CHECK(r.tables.size() == 1);
+  CHECK(!match_table(r, "anydb", 5, "orders", 6));
+
+  /* backticks around "*" still resolve to the wildcard */
+  CHECK(parse_filter_lists("`*`", "", &r, &err));
+  CHECK(r.all_schemas_cmds == CMD_ALL);
+
+  /* "*" survives alongside schema.* table wildcards and plain tables;
+     each contributes its own mask and they OR together where they
+     overlap (here, "logs" is matched by both the "*:ddl" entry and the
+     qualified "logs.*:select" wildcard) */
+  CHECK(parse_filter_lists("*:ddl", "logs.*:select, app.orders:delete",
+                           &r, &err));
+  CHECK(match_schema(r, "logs", 4) == (CMD_DDL | CMD_SELECT));
+  CHECK(match_table(r, "app", 3, "orders", 6) == CMD_DELETE);
+  CHECK(match_schema(r, "unrelated", 9) == CMD_DDL);
+}
+
 static void test_invalid_tokens()
 {
   FilterRules r;
@@ -589,6 +654,7 @@ int main()
   test_token_cleanup();
   test_table_filter_cross_schema();
   test_wildcard();
+  test_all_schemas_wildcard();
   test_invalid_tokens();
   test_command_qualifiers();
   test_extract_command();

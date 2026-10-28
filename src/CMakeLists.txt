@@ -26,4 +26,5 @@ SET(SELECTIVE_TRACE_SOURCES
 # o -Wl,--no-undefined — o plugin referencia símbolos do servidor (PSI/mysys
 # rwlock, thd_*) que só existem em runtime, resolvidos pelo mariadbd.
 MYSQL_ADD_PLUGIN(selective_trace ${SELECTIVE_TRACE_SOURCES} MODULE_ONLY
-                 RECOMPILE_FOR_EMBEDDED)
+                 RECOMPILE_FOR_EMBEDDED
+                 LINK_LIBRARIES ${CMAKE_DL_LIBS})

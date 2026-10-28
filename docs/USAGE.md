@@ -97,7 +97,7 @@ All dynamic (`SET GLOBAL`), no restart needed:
 | Variable | Type | Default | Description |
 |---|---|---|---|
 | `selective_trace_enabled` | BOOL | `OFF` | Enable/disable capture |
-| `selective_trace_schemas` | VARCHAR | `''` | Comma-separated list of schemas |
+| `selective_trace_schemas` | VARCHAR | `''` | Comma-separated list of schemas; `*` matches every schema |
 | `selective_trace_tables` | VARCHAR | `''` | Comma-separated `schema.table` list (cross-schema); `schema.*` = the whole schema |
 | `selective_trace_connections` | VARCHAR | `''` | Comma-separated connection ids (as in `SHOW PROCESSLIST`). Every statement of a listed connection is traced in full, regardless of the schema/table filters |
 | `selective_trace_output` | ENUM | `FILE` | `FILE` (one JSON line) or `TABLE` (`mysql.selective_trace_events`) |
@@ -117,6 +117,39 @@ SET GLOBAL selective_trace_schemas = 'sales:insert|update, hr';
 -- table app.orders only DELETE; the whole "logs" schema only DML
 SET GLOBAL selective_trace_tables = 'app.orders:delete, logs.*:dml';
 ```
+
+### All schemas: `*`
+
+The special entry `*` in `selective_trace_schemas` matches **every**
+schema — including ones created later, with no need to list them. It
+takes the same `:cmd1|cmd2` qualifier as any other entry, which makes it
+the way to count a command type across the whole server instead of one
+schema at a time:
+
+```sql
+-- Count INSERT/UPDATE/DELETE across every schema on the server
+SET GLOBAL selective_trace_schemas = '*:dml';
+SET GLOBAL selective_trace_output = 'TABLE';
+SET GLOBAL selective_trace_enabled = ON;
+-- ...
+SELECT command, COUNT(*) FROM mysql.selective_trace_events
+GROUP BY command;
+```
+
+- `*` and named schemas combine: `*:select, vendas:insert` logs every
+  `SELECT` server-wide *and* every `INSERT` on `vendas` (its own command
+  set is still narrower than `*`'s, if any).
+- `*` alone (no qualifier) behaves like listing every schema with no
+  restriction — equivalent to `general_log`, so set `min_duration_ms` or a
+  command qualifier if you don't actually want everything.
+- `*` is **only** recognized in `selective_trace_schemas`. In
+  `selective_trace_tables` it is just a literal, never-matching table or
+  schema name — there is no `*.orders` ("this table in every schema")
+  wildcard; use `*:insert` (whole schema) or list the schemas explicitly
+  if you need to scope it to specific tables.
+- The empty-list fail-safe still applies to an *unset* filter: `*` has to
+  be set explicitly, so a blank `selective_trace_schemas` still logs
+  nothing.
 
 Valid tokens: `select`, `insert`, `update`, `delete`, `replace`, `load`,
 `call`, `create`, `alter`, `drop`, `truncate`, `rename`, `other`, the
@@ -298,6 +331,27 @@ How it works under the hood:
 - The plugin **never logs its own INSERTs** (per-thread reentrancy guard) —
   no self-log loop, even with `mysql` in the filter.
 - If the table is dropped, it is recreated on the next INSERT.
+- The writer session runs with `lock_wait_timeout=5`: an INSERT blocked by
+  `FLUSH TABLES WITH READ LOCK` or `LOCK TABLES` on the log table fails after
+  5 s (counted in `Selective_trace_write_failures`) instead of waiting the
+  server default of 24 h — the internal connection is not visible in
+  `SHOW PROCESSLIST` and cannot be `KILL`ed. Expect write failures during a
+  backup that holds a global read lock; tracing resumes when it is released.
+- Once the writer has started, the plugin `.so` stays mapped in memory after
+  `UNINSTALL PLUGIN` (it is pinned so that an uninstall racing with an
+  in-flight INSERT cannot unload code the writer is still executing). A later
+  `INSTALL PLUGIN` reuses the mapping; upgrading the `.so` file still
+  requires a server restart, as with any plugin.
+
+### Upgrading in place (UNINSTALL → replace `.so` → INSTALL)
+
+Versions **before 1.2.6** crash the server on the first statement of any
+connection that was opened while the plugin was uninstalled (a monitoring
+agent reconnecting, an application pool growing), once the plugin is
+installed again. Since the version running during the window is the *old*
+one, upgrading from ≤ 1.2.5 should be done with clients paused, in a
+maintenance window, or by restarting the server with the new `.so` in
+place. From 1.2.6 on the window is harmless in both directions.
 
 ## 5. Status (`SHOW GLOBAL STATUS LIKE 'selective_trace%'`)
 

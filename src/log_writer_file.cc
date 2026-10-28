@@ -20,6 +20,7 @@
 #include <mysql/service_logger.h>
 
 #include <cstdio>
+#include <new>                 /* std::nothrow */
 
 #include "log_writer_file.h"
 
@@ -46,6 +47,7 @@ static const unsigned long long NO_ROTATION_SIZE= 0x7FFFFFFFFFFFFFFFULL;
 
 static mysql_rwlock_t log_lock;
 static LOGGER_HANDLE *log_handle= NULL;
+static std::string *log_path= NULL;   /* protected by log_lock */
 static unsigned long write_failures= 0;
 static int open_failed_logged= 0;   /* avoid flooding the error log */
 
@@ -64,7 +66,8 @@ static void register_psi_rwlock()
 {
 #ifdef HAVE_PSI_INTERFACE
   if (PSI_server != NULL)
-    PSI_server->register_rwlock("selective_trace", log_rwlock_list, 1);
+    /* short category: see register_filter_psi() in selective_trace.cc */
+    PSI_server->register_rwlock("sel_trace", log_rwlock_list, 1);
 #endif
 }
 
@@ -75,11 +78,18 @@ void file_writer_init()
   /* The logger service keeps its own mutex; make sure it is initialized
      before the first logger_open() call from a query thread. */
   logger_init_mutexes();
+  /* Path copy: if this fails the writer simply never opens (every write
+     counts as a failure) — no crash, and SET GLOBAL can retry later. */
+  log_path= new (std::nothrow) std::string();
 }
 
 void file_writer_deinit()
 {
   file_writer_close();
+  mysql_rwlock_wrlock(&log_lock);
+  delete log_path;
+  log_path= NULL;
+  mysql_rwlock_unlock(&log_lock);
   mysql_rwlock_destroy(&log_lock);
 }
 
@@ -102,16 +112,35 @@ static bool open_locked(const char *path)
   return true;
 }
 
-bool file_writer_reopen(const char *path)
+bool file_writer_set_path(const char *path, bool open_now)
 {
-  bool ok;
+  bool ok= true;
+  if (path == NULL)
+    path= "";
+
   mysql_rwlock_wrlock(&log_lock);
-  if (log_handle != NULL)
+  /* the lock is C state: release it even if the assignment throws */
+  try
   {
-    logger_close(log_handle);
-    log_handle= NULL;
+    if (log_path == NULL)
+      log_path= new std::string(path);
+    else
+      log_path->assign(path);
   }
-  ok= open_locked(path);
+  catch (...)
+  {
+    ok= false;                  /* previous path stays in effect */
+  }
+  if (ok)
+  {
+    if (log_handle != NULL)
+    {
+      logger_close(log_handle);
+      log_handle= NULL;
+    }
+    if (open_now)
+      ok= open_locked(log_path->c_str());
+  }
   mysql_rwlock_unlock(&log_lock);
   return ok;
 }
@@ -127,17 +156,20 @@ void file_writer_close()
   mysql_rwlock_unlock(&log_lock);
 }
 
-bool file_writer_write(const char *line, size_t len, const char *path)
+bool file_writer_write(const char *line, size_t len)
 {
   bool ok= false;
 
   mysql_rwlock_rdlock(&log_lock);
   if (log_handle == NULL)
   {
-    /* lazy open: upgrade to the write lock */
+    /* lazy open: upgrade to the write lock. The path is read under the
+       same lock that file_writer_set_path() writes it with, so it can
+       never be a buffer that a concurrent SET GLOBAL is reallocating. */
     mysql_rwlock_unlock(&log_lock);
     mysql_rwlock_wrlock(&log_lock);
-    if (log_handle == NULL && !open_locked(path))
+    if (log_handle == NULL &&
+        !open_locked(log_path ? log_path->c_str() : NULL))
     {
       mysql_rwlock_unlock(&log_lock);
       return false;

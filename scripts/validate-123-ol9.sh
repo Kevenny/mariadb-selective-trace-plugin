@@ -54,6 +54,9 @@ SELECT * FROM hotdb.nao_existe;
 SET GLOBAL selective_trace_output='TABLE';
 UPDATE hotdb.t SET v='table-mode' WHERE id=1;
 DO SLEEP(2);
+SET GLOBAL selective_trace_schemas='*:insert|update|delete';
+INSERT INTO colddb.t VALUES (10,'wildcard-all-schemas');
+SELECT * FROM colddb.t WHERE id=10;
 SQL
 
 echo "--- arquivo JSON (modo FILE) ---"

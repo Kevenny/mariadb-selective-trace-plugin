@@ -676,3 +676,110 @@ noise, present before these changes and unrelated to the plugin.
 schema was written throughout every phase, and the log table ended with
 `COUNT(*) WHERE db='cold'` = 0. No crash, no signal, no corruption in the
 error log across the entire battery.
+
+## D29. Production crash post-mortem (v1.2.6): NULL per-connection state after UNINSTALL/INSTALL
+
+**Report.** Right after "applying" 1.2.5 on a production MariaDB 11.4.4
+(generic Linux tarball, 179 threads, `server_audit` also loaded), `mariadbd`
+died with signal 11. The crashing thread's query was `SHOW GLOBAL STATUS`
+(a monitoring connection); the faulting frame was outside `mariadbd` and
+`libc`; the error log also carried an unrelated InnoDB "row size greater
+than maximum allowed size (8126 bytes) for a record on index leaf page"
+line from an application `ALTER TABLE` (confirmed at
+`ha_innodb.cc:13127`, InnoDB-only — our log table is Aria).
+
+**What was ruled out first, against the source.** (a) `SHOW GLOBAL STATUS`
+racing `UNINSTALL`: `fill_status()` holds `LOCK_all_status_vars` (read) for
+the whole callback loop and `remove_status_vars()` needs it for write before
+`deinit()`/`dlclose()` run — structurally impossible, and a 20-session
+`SHOW GLOBAL STATUS` storm across UNINSTALL/INSTALL did not crash.
+(b) SHOW_FUNC callback ABI: `mysql_show_var_func` in 11.4.4 `plugin.h`
+matches our four callbacks exactly. (c) The THDVAR blob size: 4017 bytes
+strdup'ed vs `sizeof(StatementState)` = 4016 — no overflow.
+
+**What found it.** A new ASan/UBSan harness (`scripts/asan-test.sh` +
+`scripts/deep-battery.sh`): plugin built with
+`-fsanitize=address,undefined`, loaded into the dev-built server with
+`libasan` preloaded, driven by an adversarial workload that includes
+UNINSTALL/INSTALL cycles under monitoring load. Two findings, both in that
+path:
+
+1. **UBSan: `get_state()` dereferenced NULL** (`selective_trace.cc:135`,
+   from `handle_status_event` ← `notify`). Mechanism in `sql_plugin.cc`:
+   `plugin_vars_free_values()` (UNINSTALL) frees the global default of a
+   `MEMALLOC` THDVAR and sets it NULL; a session created in the window copies
+   NULL (`sync_dynamic_session_variables`: `if (*pp) strdup`); the next
+   INSTALL finds the existing bookmark, so the session's
+   `dynamic_variables_version` is already current and the slot is never
+   re-copied. First traced statement → NULL deref. Reproduced on the
+   official `mariadb:11.4.4` image with 1.2.5: `signal 11`, frames
+   `selective_trace.so(+0x5253)` ← `mysql_audit_notify` ←
+   `general_log_write` ← `dispatch_command`, on a connection opened during
+   the window (the *installer's own* client session in the repro; a
+   monitoring agent in production). Present since 1.0.0 — every in-place
+   upgrade was a loaded gun; 1.2.4 → 1.2.5 fired it.
+
+2. **ASan: heap-use-after-free** of the sysvar `std::string` buffers:
+   freed by `selective_trace_deinit` (thread reaping the plugin), read by
+   `show_status_array` ← `fill_variables` (SHOW GLOBAL VARIABLES) on another
+   thread — the sysvars stay registered until `plugin_del()` runs *after*
+   `deinit()`. This was "item 6" of the 1.2.5 review, rated minor.
+
+**Fixes.** `get_state()` allocates the slot with `my_malloc` when NULL
+(freed by the server's `cleanup_variables` like the strdup'ed default;
+`THDVAR()` is an lvalue), and all three callers tolerate NULL (stateless
+trace). Sysvar storage became static objects that are never freed in
+`deinit`. Bonus: PFS category shortened to `sel_trace` (the old one exceeded
+`PFS_MAX_FULL_PREFIX_NAME_LENGTH`, so both rwlocks were uninstrumented and
+`build_prefix: prefix+category is too long` was logged at every load);
+JSON number buffer 64 → 96.
+
+**Verification.** Official 11.4.4 image with 1.2.6: 3 rounds of UNINSTALL →
+open monitor/app/installer sessions → INSTALL → all survive; 10 sessions of
+`SHOW VARIABLES` across 12 UNINSTALL/INSTALL cycles; ASan/UBSan battery
+(150 s storm, 10 cycles with window sessions) — 0 reports; Valgrind harness
+extended with the window scenario; PFS instruments now visible; 242/242
+unit tests. Lesson recorded in the harness itself: Valgrind alone had passed
+every release since 1.0 — it serializes threads and does not instrument
+the plugin's stores, so neither bug was visible to it.
+
+## D30. "*" wildcard for selective_trace_schemas (v1.3.0)
+
+Requested use case: count INSERT/UPDATE/DELETE across the whole server,
+not one schema at a time — the natural next step after D22's per-connection
+tracing, and a direct product request (not a bug fix).
+
+**Where it does NOT go**: not a change to the fail-safe ("both lists empty
+⇒ log nothing" stays exactly as-is — `*` must be set explicitly, it is not
+a new default). Not a change to `selective_trace_tables`: a `*.table`
+cross-schema table wildcard was considered (symmetric with the existing
+`schema.*` whole-schema wildcard) but is out of scope for this request;
+`*` there remains a literal, never-matching identifier, documented as such
+so it is not a silent gap.
+
+**Design**: `FilterRules` gained one field, `unsigned all_schemas_cmds`
+(default 0 via in-class initializer — the struct stays an aggregate,
+`gnu++11` default-constructs it fine), instead of a dedicated vector: only
+one `*` entry is meaningful per filter set, so a scalar mask is simpler
+than reusing `FilterEntry`/`add_entry` machinery built for a list. Parsing:
+in `parse_filter_lists`, a schema token that strips down to exactly `"*"`
+ORs into `all_schemas_cmds` instead of `rules.schemas` (duplicate `"*"`
+entries merge the same way duplicate named entries do). Matching:
+`match_schema` ORs `rules.all_schemas_cmds` in unconditionally (still
+gated by the existing `db == NULL || db_len == 0` early return, so a
+connection with no current schema still never matches `*`, consistent
+with how a named schema entry already behaves). `match_table` is
+deliberately untouched — the server already combines `match_table` and
+`match_schema` per table event (`handle_table_event`) and per statement
+fallback (`handle_status_event`), so updating `match_schema` alone is
+sufficient for `*` to cover every table of every schema through the
+existing call sites, with no new branch in the hot path.
+
+**Verified**: unit tests (bare `*`, qualified, duplicate merge, combined
+with a named schema, combined with `schema.*` table wildcards, backtick-
+quoted, and the `*` in `selective_trace_tables` is inert — 31 new checks,
+273 total). Live on the official 11.4.4 image: `selective_trace_schemas
+='*:dml'` across three real schemas (`vendas`, `estoque`, `testdb`) logged
+every INSERT/UPDATE/DELETE and none of the SELECTs; resetting the filter
+to empty immediately stopped logging (fail-safe intact) and setting it
+back to bare `*` resumed logging on the very next statement.

@@ -17,6 +17,12 @@
 #include <my_pthread.h>            /* portable pthread API (POSIX + Windows) */
 #include <mysql/plugin.h>          /* pulls mysql/services.h (sql service) */
 
+#ifdef _WIN32
+#  include <windows.h>             /* GetModuleHandleEx (pin the DLL) */
+#else
+#  include <dlfcn.h>               /* dladdr/dlopen (pin the .so) */
+#endif
+
 #include <deque>
 #include <string>
 #include <cstdio>
@@ -46,6 +52,19 @@ static const char CREATE_LOG_TABLE_SQL[]=
   " KEY `idx_selective_trace_ts` (`ts`)"
   ") ENGINE=Aria TRANSACTIONAL=0 DEFAULT CHARSET=utf8mb4";
 
+/*
+  The writer's internal connection is invisible to SHOW PROCESSLIST and
+  cannot be KILLed. Left at the server default (lock_wait_timeout=86400) an
+  INSERT blocked behind FLUSH TABLES WITH READ LOCK or LOCK TABLES on the
+  log table would hang for a day, and an UNINSTALL PLUGIN meanwhile would
+  hang in pthread_join for as long. Bound every lock wait instead: a
+  blocked INSERT fails after this many seconds (counted as a write failure)
+  and the writer moves on. lock_wait_timeout covers both metadata locks and
+  table-level (thr_lock) waits — see sql/lock.cc.
+*/
+static const char WRITER_SESSION_SQL[]=
+  "SET SESSION lock_wait_timeout=5";
+
 static const size_t QUEUE_MAX_EVENTS= 10000;
 
 /* Initialized at runtime in table_writer_init(): the PTHREAD_*_INITIALIZER
@@ -58,6 +77,7 @@ static std::deque<std::string> *queue= NULL;
 static int thread_running= 0;
 static int stop_requested= 0;
 static pthread_t writer_tid;
+static int module_pinned= 0;            /* protected by q_mutex */
 
 static unsigned long insert_failures= 0;
 static unsigned long dropped_events= 0;
@@ -65,7 +85,13 @@ static unsigned long reconnect_count= 0;
 static unsigned long repair_count= 0;
 static unsigned int last_logged_errno= 0;
 
-static MYSQL *conn= NULL;               /* writer thread only */
+/*
+  Set by table_writer_shutdown() when it finds itself running ON the writer
+  thread (see there). Thread-local on purpose: it is written and read by the
+  same thread, so it needs no lock, and a writer thread started by a later
+  INSTALL PLUGIN never sees the flag of the one that is still unwinding.
+*/
+static thread_local int shutdown_on_self= 0;
 
 bool table_writer_is_self()
 {
@@ -76,29 +102,66 @@ bool table_writer_is_self()
   return self;
 }
 
-static void close_conn()
+/*
+  Keep this shared object mapped for the lifetime of the process.
+
+  Every statement the writer runs on its internal connection goes through
+  the audit interface like any other, so the writer's THD holds a reference
+  on this very plugin while its INSERT executes and releases it right after
+  (sql/sql_prepare.cc:loc_advanced_command -> mysql_audit_release). If an
+  UNINSTALL PLUGIN lands while the writer is mid-INSERT and the writer ends
+  up being the *last* holder, the server reaps the plugin on the writer
+  thread itself: deinit runs inside the writer's own INSERT, and right after
+  deinit the server dlclose()s the .so — while the writer's stack still
+  points into it. The return from that INSERT would land in unmapped code.
+
+  Pinning is the documented remedy for "library with a thread that may
+  outlive dlclose": RTLD_NODELETE (plus the extra handle reference we never
+  release) makes the server's dlclose a no-op on the mapping, and the writer
+  unwinds through valid code. The server explicitly supports a DSO that is
+  not unloaded (sql/sql_plugin.cc:restore_ptr_backup), so a later INSTALL
+  PLUGIN reuses the mapping cleanly. Cost: the .so stays mapped after
+  UNINSTALL. Done lazily, only when TABLE output actually starts a writer —
+  FILE-only deployments keep the normal unload.
+*/
+static bool pin_module_in_memory()
 {
-  if (conn != NULL)
+#ifdef _WIN32
+  HMODULE h= NULL;
+  return GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                            GET_MODULE_HANDLE_EX_FLAG_PIN,
+                            (LPCSTR) &module_pinned, &h) != 0;
+#else
+  Dl_info info;
+  if (dladdr((void *) &module_pinned, &info) == 0 || info.dli_fname == NULL)
+    return false;
+  return dlopen(info.dli_fname, RTLD_NOW | RTLD_NOLOAD | RTLD_NODELETE)
+         != NULL;
+#endif
+}
+
+static void close_conn(MYSQL **conn)
+{
+  if (*conn != NULL)
   {
-    mysql_close(conn);
-    conn= NULL;
+    mysql_close(*conn);
+    *conn= NULL;
   }
 }
 
 /* writer thread only */
-static bool ensure_conn()
+static bool ensure_conn(MYSQL **conn)
 {
-  if (conn != NULL)
+  if (*conn != NULL)
     return true;
-  conn= mysql_init(NULL);
-  if (conn == NULL)
+  MYSQL *c= mysql_init(NULL);
+  if (c == NULL)
     return false;
-  if (mysql_real_connect_local(conn) == NULL)
+  if (mysql_real_connect_local(c) == NULL)
   {
     fprintf(stderr, "selective_trace: internal connection failed: %s\n",
-            mysql_error(conn));
-    mysql_close(conn);
-    conn= NULL;
+            mysql_error(c));
+    mysql_close(c);
     return false;
   }
   /*
@@ -111,38 +174,62 @@ static bool ensure_conn()
   */
   {
     static const char set_mode[]= "SET SESSION sql_mode=''";
-    if (mysql_real_query(conn, set_mode,
+    if (mysql_real_query(c, set_mode,
                          (unsigned long) (sizeof(set_mode) - 1)))
       fprintf(stderr, "selective_trace: could not set writer sql_mode: %s\n",
-              mysql_error(conn));
+              mysql_error(c));
   }
-  if (mysql_real_query(conn, CREATE_LOG_TABLE_SQL,
+  if (mysql_real_query(c, WRITER_SESSION_SQL,
+                       (unsigned long) (sizeof(WRITER_SESSION_SQL) - 1)))
+    fprintf(stderr, "selective_trace: could not set writer lock timeout:"
+            " %s\n", mysql_error(c));
+  if (mysql_real_query(c, CREATE_LOG_TABLE_SQL,
                        (unsigned long) (sizeof(CREATE_LOG_TABLE_SQL) - 1)))
     fprintf(stderr, "selective_trace: could not create " LOG_TABLE_FQN ": %s\n",
-            mysql_error(conn));
+            mysql_error(c));
+  *conn= c;
   return true;
 }
 
-/* writer thread only */
-static void run_insert(const std::string &sql)
+/*
+  writer thread only. Returns true if the row was inserted. A false return
+  has already been accounted (insert_failures or dropped_events).
+*/
+static bool run_insert(MYSQL **conn, const std::string &sql)
 {
-  if (!ensure_conn())
+  if (!ensure_conn(conn))
   {
     insert_failures++;
-    return;
+    return false;
+  }
+  if (shutdown_on_self)                 /* plugin deinitialized inside the
+                                           session setup above: don't run
+                                           anything else on its behalf */
+  {
+    dropped_events++;
+    return false;
   }
 
-  if (mysql_real_query(conn, sql.data(), (unsigned long) sql.size()) == 0)
-    return;
+  if (mysql_real_query(*conn, sql.data(), (unsigned long) sql.size()) == 0)
+    return true;
 
-  unsigned int err= mysql_errno(conn);
+  unsigned int err= mysql_errno(*conn);
+
+  /* The plugin was deinitialized inside that statement (UNINSTALL reaped on
+     this thread): the failure is real, but no retries on a dead plugin. */
+  if (shutdown_on_self)
+  {
+    insert_failures++;
+    return false;
+  }
+
   if (err == 1146 || err == 1049)       /* table/schema went missing */
   {
-    mysql_real_query(conn, CREATE_LOG_TABLE_SQL,
+    mysql_real_query(*conn, CREATE_LOG_TABLE_SQL,
                      (unsigned long) (sizeof(CREATE_LOG_TABLE_SQL) - 1));
-    if (mysql_real_query(conn, sql.data(), (unsigned long) sql.size()) == 0)
-      return;
-    err= mysql_errno(conn);
+    if (mysql_real_query(*conn, sql.data(), (unsigned long) sql.size()) == 0)
+      return true;
+    err= mysql_errno(*conn);
   }
   /*
     The log table is Aria/TRANSACTIONAL=0 (fast, not crash-safe), so an
@@ -159,26 +246,26 @@ static void run_insert(const std::string &sql)
   else if (err == 126 || err == 127 || err == 144 || err == 145 ||
            err == 180 || err == 1194 || err == 1195 || err == 1034)
   {
-    if (mysql_real_query(conn, REPAIR_LOG_TABLE_SQL,
+    if (mysql_real_query(*conn, REPAIR_LOG_TABLE_SQL,
                          (unsigned long) (sizeof(REPAIR_LOG_TABLE_SQL) - 1)) == 0)
     {
       /* REPAIR returns a result set; drain it or the connection desyncs. */
-      MYSQL_RES *res= mysql_store_result(conn);
+      MYSQL_RES *res= mysql_store_result(*conn);
       if (res != NULL)
         mysql_free_result(res);
       repair_count++;
-      if (mysql_real_query(conn, sql.data(), (unsigned long) sql.size()) == 0)
-        return;
+      if (mysql_real_query(*conn, sql.data(), (unsigned long) sql.size()) == 0)
+        return true;
     }
-    err= mysql_errno(conn);
+    err= mysql_errno(*conn);
   }
   else if (err == 2006 || err == 2013)  /* connection gone: retry once */
   {
-    close_conn();
-    if (ensure_conn() &&
-        mysql_real_query(conn, sql.data(), (unsigned long) sql.size()) == 0)
-      return;
-    err= conn ? mysql_errno(conn) : err;
+    close_conn(conn);
+    if (ensure_conn(conn) &&
+        mysql_real_query(*conn, sql.data(), (unsigned long) sql.size()) == 0)
+      return true;
+    err= *conn ? mysql_errno(*conn) : err;
   }
 
   insert_failures++;
@@ -187,8 +274,9 @@ static void run_insert(const std::string &sql)
     last_logged_errno= err;
     fprintf(stderr, "selective_trace: INSERT into " LOG_TABLE_FQN
             " failed (errno %u): %s\n", err,
-            conn ? mysql_error(conn) : "no connection");
+            *conn ? mysql_error(*conn) : "no connection");
   }
+  return false;
 }
 
 /*
@@ -202,12 +290,26 @@ static void run_insert(const std::string &sql)
 */
 static const unsigned long RECONNECT_EVERY_N_INSERTS= 20000;
 
+static int stop_requested_now()
+{
+  int s;
+  pthread_mutex_lock(&q_mutex);
+  s= stop_requested;
+  pthread_mutex_unlock(&q_mutex);
+  return s;
+}
+
 static void *writer_thread_func(void *arg __attribute__((unused)))
 {
   my_thread_init();
 
+  /* The connection is private to this thread (not a global): a writer that
+     is still unwinding after a self-shutdown (see table_writer_shutdown)
+     must never race with the writer of a subsequent INSTALL PLUGIN. */
+  MYSQL *conn= NULL;
   std::deque<std::string> batch;
   unsigned long since_reconnect= 0;
+  int exit_now= 0;
   for (;;)
   {
     pthread_mutex_lock(&q_mutex);
@@ -219,30 +321,53 @@ static void *writer_thread_func(void *arg __attribute__((unused)))
 
     for (size_t i= 0; i < batch.size(); i++)
     {
+      bool ok;
       /* never let an exception kill the writer thread (and the server) */
       try
       {
-        run_insert(batch[i]);
+        ok= run_insert(&conn, batch[i]);
       }
       catch (...)
       {
         insert_failures++;
+        ok= false;
+      }
+
+      if (shutdown_on_self)
+      {
+        /* deinit ran on this very thread inside the statement above: the
+           plugin is gone and the queue was freed by table_writer_shutdown.
+           Drop what is left of the batch and leave without touching q_mutex
+           or q_cond again. */
+        dropped_events+= (unsigned long) (batch.size() - i - 1);
+        exit_now= 1;
+        break;
+      }
+
+      if (!ok && stop_requested_now())
+      {
+        /* Shutting down and INSERTs are failing (lock wait timeout, table
+           gone...): draining the rest would make deinit wait one timeout
+           per queued event. Drop them instead. */
+        dropped_events+= (unsigned long) (batch.size() - i - 1);
+        stopping= 1;
+        break;
       }
 
       if (++since_reconnect >= RECONNECT_EVERY_N_INSERTS)
       {
-        close_conn();
+        close_conn(&conn);
         since_reconnect= 0;
         reconnect_count++;
       }
     }
     batch.clear();
 
-    if (stopping)
+    if (exit_now || stopping)
       break;
   }
 
-  close_conn();
+  close_conn(&conn);
   my_thread_end();
   return NULL;
 }
@@ -252,6 +377,15 @@ static bool start_thread_locked()
 {
   if (thread_running)
     return true;
+  if (!module_pinned)
+  {
+    if (pin_module_in_memory())
+      module_pinned= 1;
+    else
+      fprintf(stderr, "selective_trace: could not pin the plugin module in"
+              " memory; an UNINSTALL PLUGIN racing with the table writer"
+              " may crash the server\n");
+  }
   stop_requested= 0;
   if (pthread_create(&writer_tid, NULL, writer_thread_func, NULL) != 0)
   {
@@ -293,7 +427,38 @@ void table_writer_shutdown()
   pthread_t tid;
   int join_it= 0;
 
+  if (!sync_inited)
+    return;
+
   pthread_mutex_lock(&q_mutex);
+  if (thread_running && pthread_equal(pthread_self(), writer_tid))
+  {
+    /*
+      deinit is running ON the writer thread: the server reaped the plugin
+      from the audit release at the end of one of our own INSERTs (UNINSTALL
+      raced with the writer, see pin_module_in_memory). We cannot join
+      ourselves — pthread_join(self) returns EDEADLK on POSIX and hangs on
+      Windows. Tell the loop to exit as soon as the statement unwinds
+      (shutdown_on_self is checked right after run_insert), free the queue
+      here, and leave q_mutex/q_cond initialized: the thread must not touch
+      them again and a later table_writer_init() reuses them (sync_inited).
+      The .so stays mapped (pinned), so unwinding through it is safe.
+    */
+    stop_requested= 1;
+    thread_running= 0;
+    shutdown_on_self= 1;
+    if (queue != NULL)
+    {
+      dropped_events+= (unsigned long) queue->size();
+      delete queue;
+      queue= NULL;
+    }
+    pthread_mutex_unlock(&q_mutex);
+#ifndef _WIN32
+    pthread_detach(pthread_self());     /* nobody will join us */
+#endif
+    return;
+  }
   if (thread_running)
   {
     stop_requested= 1;
@@ -308,16 +473,18 @@ void table_writer_shutdown()
 
   pthread_mutex_lock(&q_mutex);
   thread_running= 0;
-  delete queue;
-  queue= NULL;
+  if (queue != NULL)
+  {
+    dropped_events+= (unsigned long) queue->size();   /* enqueued after the
+                                                          writer's last swap */
+    delete queue;
+    queue= NULL;
+  }
   pthread_mutex_unlock(&q_mutex);
 
-  if (sync_inited)
-  {
-    pthread_mutex_destroy(&q_mutex);
-    pthread_cond_destroy(&q_cond);
-    sync_inited= 0;
-  }
+  pthread_mutex_destroy(&q_mutex);
+  pthread_cond_destroy(&q_cond);
+  sync_inited= 0;
 }
 
 bool table_writer_enqueue(std::string *sql)

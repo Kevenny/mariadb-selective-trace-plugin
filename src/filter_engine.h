@@ -85,11 +85,19 @@ struct FilterRules
      listed connection is traced in full (all its statements), regardless
      of the schema/table filters. */
   std::vector<unsigned long long> connections;
+  /* From a "*" entry of selective_trace_schemas: matches every schema
+     (and, transitively, every table in every schema — schema_cmds is
+     OR'd into every table event's cmd_mask the same way a named schema
+     entry is). 0 = not set. Typical use: "*:dml" to count INSERT/UPDATE/
+     DELETE across the whole server. Only recognized in the schemas list;
+     "*" in selective_trace_tables is just a literal (never-matching)
+     table name, not a cross-schema wildcard. */
+  unsigned all_schemas_cmds= 0;
 
   bool empty() const
   {
     return schemas.empty() && wildcard_schemas.empty() &&
-           tables.empty() && connections.empty();
+           tables.empty() && connections.empty() && all_schemas_cmds == 0;
   }
 };
 
@@ -99,6 +107,10 @@ struct FilterRules
   - Tokens are trimmed of ASCII whitespace and lowercased; empty tokens are
     ignored (so "a,,b" and trailing commas are fine).
   - Optional backticks around each identifier part are stripped.
+  - A schema token that is exactly "*" matches every schema (out->
+    all_schemas_cmds) instead of being added to out->schemas; "select *"-
+    style confusion aside, there is no ambiguity because schema names
+    cannot contain a dot and "*" is otherwise never a valid identifier.
   - Table tokens must be schema.table; "schema.*" is accepted as a
     whole-schema wildcard (equivalent to listing the schema in the schema
     list). Anything else (missing dot, empty part, extra dot) is invalid.
@@ -130,9 +142,9 @@ bool match_connection(const FilterRules &rules, unsigned long long conn_id);
 
 /*
   Union of the command masks of every schema-filter entry matching db
-  (schemas list and schema.* wildcards). 0 = no match. Empty rules never
-  match — callers get the "both lists empty means log nothing" fail-safe
-  for free.
+  (schemas list, schema.* wildcards, and a "*" all-schemas entry). 0 = no
+  match. Empty rules never match — callers get the "both lists empty means
+  log nothing" fail-safe for free.
 */
 unsigned match_schema(const FilterRules &rules,
                       const char *db, size_t db_len);

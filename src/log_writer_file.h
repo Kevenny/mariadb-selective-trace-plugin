@@ -35,20 +35,23 @@ void file_writer_init();
 void file_writer_deinit();
 
 /*
-  (Re)open the log file at path. Safe to call while other threads write.
-  Returns true on success; on failure the writer stays closed and
-  file_writer_write() becomes a no-op returning false.
+  Set the log file path. The writer keeps its own copy, guarded by the same
+  rwlock as the handle, so a concurrent lazy open in file_writer_write()
+  can never read a buffer the sysvar update is reallocating. Any open handle
+  is closed; with open_now the new file is opened immediately (returns false
+  if that fails and the writer stays closed), otherwise it opens lazily on
+  the next write. Safe to call while other threads write.
 */
-bool file_writer_reopen(const char *path);
+bool file_writer_set_path(const char *path, bool open_now);
 
 void file_writer_close();
 
 /*
   Append one line (caller includes the trailing '\n'). Lazily opens the
-  file on first use with the path given. Returns true if the line hit the
-  file.
+  file on first use at the path last given to file_writer_set_path().
+  Returns true if the line hit the file.
 */
-bool file_writer_write(const char *line, size_t len, const char *path);
+bool file_writer_write(const char *line, size_t len);
 
 /* Total failed writes/opens since load (for diagnostics/status). */
 unsigned long file_writer_failures();

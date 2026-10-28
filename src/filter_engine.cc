@@ -231,7 +231,10 @@ bool parse_filter_lists(const char *schemas_csv, const char *tables_csv,
         *error= raw_schemas[i];
       return false;
     }
-    add_entry(rules.schemas, schema, cmds);
+    if (schema == "*")
+      rules.all_schemas_cmds|= cmds;       /* duplicate "*": merge masks */
+    else
+      add_entry(rules.schemas, schema, cmds);
   }
 
   std::vector<std::string> raw_tables;
@@ -273,6 +276,7 @@ bool parse_filter_lists(const char *schemas_csv, const char *tables_csv,
   out->schemas.swap(rules.schemas);
   out->wildcard_schemas.swap(rules.wildcard_schemas);
   out->tables.swap(rules.tables);
+  out->all_schemas_cmds= rules.all_schemas_cmds;
   return true;
 }
 
@@ -327,6 +331,7 @@ unsigned match_schema(const FilterRules &rules, const char *db, size_t db_len)
   unsigned cmds= 0;
   if (db == NULL || db_len == 0)
     return 0;
+  cmds|= rules.all_schemas_cmds;           /* "*" entry: matches any db */
   for (size_t i= 0; i < rules.schemas.size(); i++)
     if (ci_eq(rules.schemas[i].name, db, db_len))
       cmds|= rules.schemas[i].cmds;

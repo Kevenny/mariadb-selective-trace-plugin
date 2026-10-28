@@ -36,8 +36,8 @@
   the hot path only takes read locks, so queries never serialize.
 */
 
-#define PLUGIN_VERSION      0x0124
-#define PLUGIN_STR_VERSION  "1.2.4"
+#define PLUGIN_VERSION      0x0130
+#define PLUGIN_STR_VERSION  "1.3.0"
 
 #include <my_global.h>
 #include <my_pthread.h>
@@ -66,10 +66,23 @@ using selective_trace::FilterRules;
 
 static mysql_rwlock_t filter_lock;
 static FilterRules *active_rules= NULL;
-static std::string *schemas_storage= NULL;
-static std::string *tables_storage= NULL;
-static std::string *connections_storage= NULL;
-static std::string *file_path_storage= NULL;
+/*
+  Backing storage for the string sysvars (opt_schemas & friends point into
+  these). They are static objects, never freed in deinit, on purpose: after
+  deinit() returns the server still keeps our sysvars registered until
+  plugin_del() runs, and a concurrent SHOW VARIABLES in that window reads
+  the value pointers. Freeing the strings in deinit was a heap-use-after-free
+  (caught by ASan). The objects live as long as the .so is mapped, which is
+  exactly as long as the value pointers can be reached.
+*/
+static std::string schemas_storage_obj;
+static std::string tables_storage_obj;
+static std::string connections_storage_obj;
+static std::string file_path_storage_obj;
+static std::string *schemas_storage= &schemas_storage_obj;
+static std::string *tables_storage= &tables_storage_obj;
+static std::string *connections_storage= &connections_storage_obj;
+static std::string *file_path_storage= &file_path_storage_obj;
 static int plugin_ready= 0;
 /* exceptions swallowed at the C boundaries (SHOW STATUS) */
 static ulong status_callback_errors= 0;
@@ -129,9 +142,36 @@ static MYSQL_THDVAR_STR(state,
     "selective_trace internal per-connection state", NULL, NULL,
     state_init_value);
 
+/*
+  Returns the per-connection state, or NULL if it cannot be obtained (out
+  of memory). Callers must cope with NULL by tracing statelessly.
+
+  The slot can legitimately be NULL: on UNINSTALL PLUGIN the server frees
+  the global default of every MEMALLOC THDVAR and sets it to NULL
+  (sql_plugin.cc:plugin_vars_free_values). A session opened while the
+  plugin is uninstalled copies that NULL into its own slot, and a later
+  INSTALL PLUGIN never re-copies it: the bookmark already exists, so the
+  session is considered up to date (sync_dynamic_session_variables only
+  copies variables newer than the session). The first traced statement of
+  such a session then dereferenced NULL -> SIGSEGV. Real-world trigger: a
+  monitoring agent or an application pool reconnecting during the
+  UNINSTALL -> INSTALL window of a plugin upgrade. Reproduced on the
+  official 11.4.4 binary. Allocate the slot ourselves in that case, exactly
+  as the server would have: my_malloc'ed, freed by the server together with
+  the THD (sql_plugin.cc:cleanup_variables does my_free on MEMALLOC slots).
+*/
 static StatementState *get_state(MYSQL_THD thd)
 {
-  StatementState *st= (StatementState *) THDVAR(thd, state);
+  char *&slot= THDVAR(thd, state);
+  if (slot == NULL)
+  {
+    slot= (char *) my_malloc(PSI_NOT_INSTRUMENTED,
+                             sizeof(struct StatementState) + 1,
+                             MYF(MY_ZEROFILL));
+    if (slot == NULL)
+      return NULL;
+  }
+  StatementState *st= (StatementState *) slot;
   if (st->magic != STATE_MAGIC)
   {
     memset(st, 0, sizeof(*st));
@@ -164,10 +204,23 @@ static my_bool opt_mask_passwords= TRUE;
 #define SELECTIVE_TRACE_OUTPUT_TABLE 1
 
 static const char *output_names[]= { "FILE", "TABLE", NullS };
-static TYPELIB output_typelib=
+/*
+  Filled at load time instead of with an aggregate initializer: TYPELIB
+  gained a 5th member (hidden_values) in 12.x, so a 4-value initializer
+  warns there and a 5-value one does not compile on 11.4. Zero-initialized
+  static storage + explicit field assignment is correct on both, and runs
+  in a constructor because the server reads the typelib while registering
+  the sysvars, before init().
+*/
+static TYPELIB output_typelib;
+
+static void __attribute__((constructor)) selective_trace_typelib_init(void)
 {
-  array_elements(output_names) - 1, "", output_names, NULL
-};
+  output_typelib.count= array_elements(output_names) - 1;
+  output_typelib.name= "";
+  output_typelib.type_names= output_names;
+  output_typelib.type_lengths= NULL;
+}
 
 static int check_filter_list(MYSQL_THD thd __attribute__((unused)),
                              struct st_mysql_sys_var *var,
@@ -349,11 +402,12 @@ static void update_file_path(MYSQL_THD thd __attribute__((unused)),
     return;                     /* keep the previous path */
   }
 
-  /* Reopen only if the writer is in use; otherwise it opens lazily. */
-  if (opt_enabled && opt_output == SELECTIVE_TRACE_OUTPUT_FILE)
-    selective_trace::file_writer_reopen(file_path_storage->c_str());
-  else
-    selective_trace::file_writer_close();
+  /* Hand the writer its own copy (taken under the writer's lock — the hot
+     path never reads opt_file_path). Reopen only if the writer is in use;
+     otherwise it opens lazily. */
+  selective_trace::file_writer_set_path(
+      file_path_storage->c_str(),
+      opt_enabled && opt_output == SELECTIVE_TRACE_OUTPUT_FILE);
 }
 
 static MYSQL_SYSVAR_BOOL(enabled, opt_enabled, PLUGIN_VAR_OPCMDARG,
@@ -363,7 +417,9 @@ static MYSQL_SYSVAR_BOOL(enabled, opt_enabled, PLUGIN_VAR_OPCMDARG,
 static MYSQL_SYSVAR_STR(schemas, opt_schemas,
   PLUGIN_VAR_RQCMDARG,
   "Comma separated list of schemas whose queries are logged."
-  " Empty means no schema filter.",
+  " Empty means no schema filter. The special entry '*' matches every"
+  " schema (e.g. '*:dml' to count INSERT/UPDATE/DELETE server-wide);"
+  " only recognized here, not in selective_trace_tables.",
   check_schemas, update_schemas, "");
 
 static MYSQL_SYSVAR_STR(tables, opt_tables,
@@ -652,6 +708,10 @@ static void handle_table_event(MYSQL_THD thd,
                                const struct mysql_event_table *event)
 {
   StatementState *st= get_state(thd);
+  if (st == NULL)                       /* no per-connection memory: the
+                                           STATUS event still applies the
+                                           schema/connection filters */
+    return;
 
   /* Plugin enabled mid-statement (no GENERAL_LOG seen): start ad-hoc,
      without a start clock. Inside a statement we accumulate everything —
@@ -698,6 +758,15 @@ static void handle_status_event(MYSQL_THD thd,
     return;
 
   StatementState *st= get_state(thd);
+  StatementState stateless;
+  if (st == NULL)
+  {
+    /* No per-connection memory (allocation failed): trace statelessly —
+       schema/connection filters only, no tables, no duration. */
+    memset(&stateless, 0, sizeof(stateless));
+    stateless.magic= STATE_MAGIC;
+    st= &stateless;
+  }
 
   /* Which command is this statement? Needed for the per-entry command
      qualifiers, and reused verbatim in the output. */
@@ -754,7 +823,7 @@ static void handle_status_event(MYSQL_THD thd,
              (int) ((usec / 1000ULL) % 1000ULL));
 
     const int have_tables= (st->in_statement && st->tables_len > 0);
-    char numbuf[64];
+    char numbuf[96];                    /* two 20-digit ids + labels fit */
     std::string user_host;
     parse_user_host(&user_host, event->general_user,
                     event->general_user_length);
@@ -828,8 +897,7 @@ static void handle_status_event(MYSQL_THD thd,
       selective_trace::json_escape_append(&line, qtext, qlen);
       line.append("\"}\n");
 
-      if (selective_trace::file_writer_write(line.data(), line.size(),
-                                           opt_file_path))
+      if (selective_trace::file_writer_write(line.data(), line.size()))
         status_events_logged++;
     }
     else                                /* SELECTIVE_TRACE_OUTPUT_TABLE */
@@ -898,7 +966,8 @@ static void notify_impl(MYSQL_THD thd, unsigned int event_class,
     {
       /* statement dispatch starts: stamp the state */
       StatementState *st= get_state(thd);
-      state_begin_statement(st, ev->query_id, 1);
+      if (st != NULL)
+        state_begin_statement(st, ev->query_id, 1);
     }
     else if (ev->event_subclass == MYSQL_AUDIT_GENERAL_STATUS)
       handle_status_event(thd, ev);
@@ -940,7 +1009,11 @@ static void register_filter_psi()
 {
 #ifdef HAVE_PSI_INTERFACE
   if (PSI_server != NULL)
-    PSI_server->register_rwlock("selective_trace", rwlock_key_list, 1);
+    /* Category must keep "wait/synch/rwlock/" + category + "/" under the
+       32-byte PFS prefix limit (PFS_MAX_FULL_PREFIX_NAME_LENGTH); the old
+       "selective_trace" category was rejected with "build_prefix:
+       prefix+category is too long" and left the lock uninstrumented. */
+    PSI_server->register_rwlock("sel_trace", rwlock_key_list, 1);
 #endif
 }
 
@@ -951,17 +1024,19 @@ static int selective_trace_init(void *arg __attribute__((unused)))
   selective_trace::file_writer_init();
   selective_trace::table_writer_init();
 
-  schemas_storage= new (std::nothrow) std::string(
-      opt_schemas ? opt_schemas : "");
-  tables_storage= new (std::nothrow) std::string(
-      opt_tables ? opt_tables : "");
-  connections_storage= new (std::nothrow) std::string(
-      opt_connections ? opt_connections : "");
-  file_path_storage= new (std::nothrow) std::string(
-      opt_file_path ? opt_file_path : "");
-  if (schemas_storage == NULL || tables_storage == NULL ||
-      connections_storage == NULL || file_path_storage == NULL)
+  /* Copy the option values the server handed us (defaults / my.cnf /
+     INSTALL-time memroot copies) into our own storage. */
+  try
+  {
+    schemas_storage->assign(opt_schemas ? opt_schemas : "");
+    tables_storage->assign(opt_tables ? opt_tables : "");
+    connections_storage->assign(opt_connections ? opt_connections : "");
+    file_path_storage->assign(opt_file_path ? opt_file_path : "");
+  }
+  catch (...)
+  {
     goto fail;
+  }
 
   /* Point the sysvars at our storage from the start, so the update
      callbacks and SHOW VARIABLES always deal with the same memory. */
@@ -969,6 +1044,8 @@ static int selective_trace_init(void *arg __attribute__((unused)))
   opt_tables= const_cast<char *>(tables_storage->c_str());
   opt_connections= const_cast<char *>(connections_storage->c_str());
   opt_file_path= const_cast<char *>(file_path_storage->c_str());
+  /* the file writer keeps its own copy of the path; opens lazily */
+  selective_trace::file_writer_set_path(file_path_storage->c_str(), false);
 
   if (rebuild_rules_locked(schemas_storage->c_str(),
                            tables_storage->c_str(),
@@ -980,11 +1057,6 @@ static int selective_trace_init(void *arg __attribute__((unused)))
   return 0;
 
 fail:
-  delete schemas_storage;
-  delete tables_storage;
-  delete connections_storage;
-  delete file_path_storage;
-  schemas_storage= tables_storage= connections_storage= file_path_storage= NULL;
   selective_trace::table_writer_shutdown();
   selective_trace::file_writer_deinit();
   mysql_rwlock_destroy(&filter_lock);
@@ -1002,11 +1074,9 @@ static int selective_trace_deinit(void *arg __attribute__((unused)))
 
   delete active_rules;
   active_rules= NULL;
-  delete schemas_storage;
-  delete tables_storage;
-  delete connections_storage;
-  delete file_path_storage;
-  schemas_storage= tables_storage= connections_storage= file_path_storage= NULL;
+  /* The *_storage strings are deliberately NOT freed here: our sysvars stay
+     registered (and readable by SHOW VARIABLES) until the server's
+     plugin_del() runs after this function returns. See their declaration. */
 
   mysql_rwlock_destroy(&filter_lock);
   fprintf(stderr, "selective_trace: plugin stopped\n");

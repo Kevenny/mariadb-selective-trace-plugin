@@ -117,9 +117,15 @@ $CLIENT -e "SET GLOBAL selective_trace_tables='invalido'" 2>/dev/null || true
 
 echo ">> UNINSTALL/INSTALL sob Valgrind"
 $CLIENT -e "UNINSTALL PLUGIN selective_trace" || true
+# v1.2.6 scenario: sessions opened while the plugin is uninstalled must survive
+# their first statement after the re-INSTALL (NULL THDVAR slot, my_malloc path)
+$CLIENT -e "SELECT SLEEP(6); SHOW GLOBAL STATUS; SELECT COUNT(*) FROM vg_hot.t" >/dev/null 2>&1 &
+$CLIENT vg_hot -e "SELECT SLEEP(6); INSERT INTO t (v) VALUES ('window'); SELECT * FROM t LIMIT 1" >/dev/null 2>&1 &
 sleep 2
 $CLIENT -e "INSTALL PLUGIN selective_trace SONAME 'selective_trace.so'"
 $CLIENT -e "SET GLOBAL selective_trace_enabled=ON; SET GLOBAL selective_trace_schemas='vg_hot'; SELECT COUNT(*) FROM vg_hot.t"
+wait   # the window sessions run their statements against the re-installed plugin
+$CLIENT -e "SELECT 'window sessions survived' AS s"
 
 echo ">> Shutdown limpo"
 $ADMIN shutdown

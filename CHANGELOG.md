@@ -4,6 +4,158 @@ All notable changes to `selective_trace` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/), and the
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.3.0] - 2026-10-27
+
+### Added
+
+- **`*` wildcard in `selective_trace_schemas`**: matches every schema,
+  including ones created later. Takes the same `:cmd1|cmd2` qualifier as
+  any other entry, so `selective_trace_schemas='*:dml'` counts
+  INSERT/UPDATE/DELETE across the whole server without listing schemas one
+  by one. Combines with named schema entries (each contributes its own
+  mask independently). Only recognized in `selective_trace_schemas` — in
+  `selective_trace_tables` it stays a literal, never-matching identifier,
+  not a cross-schema table wildcard. The existing fail-safe is unaffected:
+  an unset (empty) `selective_trace_schemas` still logs nothing; `*` has
+  to be set explicitly. 31 new unit tests (273 total).
+
+## [1.2.6] - 2026-09-18
+
+### Fixed
+
+- **Server crash (SIGSEGV) on the first statement of any connection opened
+  while the plugin was uninstalled, once it is installed again.** This is
+  the crash reported from production right after upgrading 1.2.4 → 1.2.5
+  (`UNINSTALL PLUGIN` → replace `.so` → `INSTALL PLUGIN`): the crashing
+  thread was a monitoring connection running `SHOW GLOBAL STATUS`, i.e. a
+  session that had reconnected during the upgrade window. Reproduced
+  deterministically on the official 11.4.4 binary.
+
+  Mechanism (verified in `sql/sql_plugin.cc`): on `UNINSTALL` the server
+  frees the global default of every `PLUGIN_VAR_MEMALLOC` thread variable
+  and sets it to NULL (`plugin_vars_free_values`). A session created while
+  the plugin is absent copies that NULL into its own slot. The next
+  `INSTALL` reuses the existing variable bookmark, so
+  `sync_dynamic_session_variables` considers those sessions up to date and
+  never re-copies the fresh default. The plugin's per-connection state
+  (`THDVAR(thd, state)`) was therefore NULL for them, and `get_state()`
+  dereferenced it. The bug has existed since 1.0.0 in every version, in
+  both output modes; it only needs one connection to be opened between the
+  two statements of an upgrade. `get_state()` now allocates the slot itself
+  when it finds it NULL (`my_malloc`, freed by the server with the THD, the
+  same lifecycle the server gives the strdup'ed default), and every caller
+  copes with a NULL state by tracing statelessly if that allocation fails.
+
+- **Heap-use-after-free of the sysvar strings during `UNINSTALL PLUGIN`
+  (caught by AddressSanitizer).** `deinit()` deleted the `std::string`
+  objects that `selective_trace_schemas`/`tables`/`connections`/`file_path`
+  point into, but the server keeps those sysvars registered until its own
+  `plugin_del()` runs after `deinit()` returns; a `SHOW GLOBAL VARIABLES`
+  (or `information_schema.GLOBAL_VARIABLES`) in that window read freed
+  memory. The storage is now static and lives as long as the `.so` is
+  mapped. (This was the "item 6" finding of the 1.2.5 review, then rated
+  minor; ASan showed it is reachable under a monitoring workload.)
+
+- **Performance Schema instruments were silently dropped.** The rwlock
+  category `selective_trace` made `wait/synch/rwlock/selective_trace/`
+  exceed the 32-byte PFS prefix limit; the server logged `build_prefix:
+  prefix+category is too long` at every load and left both locks
+  uninstrumented. Category is now `sel_trace`; the locks appear in
+  `performance_schema.setup_instruments` as
+  `wait/synch/rwlock/sel_trace/SELECTIVE_TRACE::filter_lock` and
+  `.../SELECTIVE_TRACE::log_file_lock`, and the warning is gone.
+
+- JSON number buffer widened (64 → 96 bytes): two 20-digit ids plus labels
+  could not fit before; `snprintf` bounded it, so this was truncation, not
+  memory corruption.
+
+### Added
+
+- `scripts/asan-test.sh` + `scripts/deep-battery.sh`: builds the plugin with
+  AddressSanitizer and UndefinedBehaviorSanitizer, runs it inside the
+  dev-built server with `libasan` preloaded (alongside `server_audit`), and
+  drives an adversarial workload — 61-table joins with 64-char names,
+  routines, triggers, prepared statements, XA, HANDLER, LOAD DATA,
+  credential statements, 1.5 MB statements, bare `SHOW GLOBAL STATUS` /
+  `SHOW VARIABLES` monitors, connection churn, sysvar churn, FTWRL, DROP
+  of the log table, and UNINSTALL/INSTALL cycles with connections opened
+  in the window. Both 1.2.6 bugs were found by this harness and are
+  absent after the fix (0 sanitizer reports, 150 s storm, 10 cycles).
+
+### Verified
+
+- Crash scenario on the official MariaDB 11.4.4 image with 1.2.5: SIGSEGV
+  inside `selective_trace.so` from `mysql_audit_notify` (matches the
+  production stack). With 1.2.6: three rounds of UNINSTALL → connections
+  opened (monitor, application, and the installer's own) → INSTALL → all
+  sessions run normally; a `SHOW VARIABLES` storm from 10 sessions across
+  12 UNINSTALL/INSTALL cycles; ASan/UBSan battery clean; 242/242 unit tests.
+
+### Upgrade note
+
+Upgrading **from any earlier version** still requires the UNINSTALL →
+replace `.so` → INSTALL sequence, and the *old* plugin is the one running
+during the window — so the crash can still be triggered by connections
+opened between the two statements until 1.2.6 is the installed version.
+Safest procedure: do the upgrade in a maintenance window, or with
+monitoring agents and connection pools paused, or simply restart the
+server with the new `.so` in place. From 1.2.6 on, the window is harmless.
+
+## [1.2.5] - 2026-09-17
+
+### Fixed
+
+- **Server crash (or hang on Windows) when `UNINSTALL PLUGIN` raced with the
+  TABLE writer.** The writer's internal connection goes through the audit
+  interface like any client, so its THD holds a reference on the plugin for
+  the duration of each INSERT. If the UNINSTALL landed while an INSERT was in
+  flight and the writer turned out to be the last reference holder, the
+  server reaped the plugin *on the writer thread itself*: `deinit` ran inside
+  the writer's own INSERT and tried to `pthread_join` itself (EDEADLK,
+  ignored), then the server `dlclose()`d the `.so` while the writer's stack
+  still pointed into it — SIGSEGV on the return from that INSERT. Realistic
+  trigger: a long `SELECT` or `LOCK TABLES` on `mysql.selective_trace_events`
+  while uninstalling.
+
+  The writer now pins the module in memory when it starts (`RTLD_NODELETE`
+  on POSIX, `GET_MODULE_HANDLE_EX_FLAG_PIN` on Windows — the server already
+  supports a DSO that is not unloaded, see `sql_plugin.cc:restore_ptr_backup`),
+  and `table_writer_shutdown()` detects that it is running on the writer
+  thread: it no longer tries to join itself, frees the queue, and lets the
+  thread exit as soon as the statement unwinds. The pin is lazy: FILE-only
+  deployments keep the normal unload. The writer connection is now a
+  thread-private handle rather than a global, so a writer still unwinding
+  can never race with the one started by a subsequent `INSTALL PLUGIN`.
+
+- **A blocked writer could hang for a day and freeze `UNINSTALL PLUGIN` with
+  it.** The internal connection is invisible to `SHOW PROCESSLIST` and cannot
+  be `KILL`ed, and it inherited the server default `lock_wait_timeout=86400`.
+  A `FLUSH TABLES WITH READ LOCK` (backup) or `LOCK TABLES` on the log table
+  left the INSERT waiting up to 24 h, and an UNINSTALL or server shutdown in
+  that window waited in `pthread_join` for as long. The writer session now
+  sets `lock_wait_timeout=5`: a blocked INSERT fails after 5 s (counted in
+  `Selective_trace_write_failures`) and the writer moves on. During shutdown,
+  once an INSERT fails the remaining queued events are dropped (counted in
+  `Selective_trace_events_dropped`) instead of each waiting its own timeout.
+  Events still queued when the writer stops are now counted as dropped too
+  (previously they vanished silently).
+
+- **Use-after-free window in FILE mode when `selective_trace_file_path` was
+  changed while the file had not been opened yet.** The lazy open in the
+  audit hot path dereferenced the sysvar's string buffer without a lock,
+  while the `SET GLOBAL` update callback reassigned (and could reallocate)
+  that same buffer. The realistic trigger was exactly the operational fix
+  for a wrong path: the file fails to open (bad directory, permissions),
+  traced traffic keeps hitting the lazy-open branch, and the admin sets a
+  longer path. The file writer now keeps its own copy of the path under the
+  same rwlock that guards the handle (`file_writer_set_path()`); the hot
+  path never reads the sysvar buffer.
+
+### Build
+
+- `src/CMakeLists.txt` links `${CMAKE_DL_LIBS}` (for `dladdr`/`dlopen` on
+  glibc < 2.34; no-op elsewhere).
+
 ## [1.2.4] - 2026-08-20
 
 ### Added
