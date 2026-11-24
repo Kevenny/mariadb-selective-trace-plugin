@@ -11,20 +11,23 @@ to `general_log`.
 The plugin is a native binary — use the `.so` compiled for the server's
 platform:
 
+One `.so` per **MariaDB server series**, not per Linux distro — each is built
+against the EL8 toolchain (glibc 2.17 floor), which also runs unmodified on
+newer-glibc distros (Ubuntu, Debian, EL9, ...). There is no separate
+Ubuntu-specific build; it would just be the same bytes with a narrower claim.
+
 | Platform / server series | Build |
 |---|---|
-| Ubuntu 22.04+/Debian · MariaDB 11.4 (glibc ≥ 2.35) | `build/plugin_output/selective_trace.so` (`dev` container) |
-| Oracle Linux / RHEL / Rocky / Alma **8 and 9** · MariaDB **11.4** | `build/plugin_output-ol8/selective_trace.so` (`dev-ol8` container, glibc ≥ 2.17) |
-| Oracle Linux / RHEL 8+ · MariaDB **12.3+** | `build/plugin_output-123-ol9/selective_trace.so` (`dev-123-ol8` container) |
+| Any Linux, glibc ≥ 2.17 (Ubuntu 22.04+, Debian, Oracle Linux/RHEL/Rocky/Alma 8+, ...) · MariaDB **11.4** | `build/plugin_output-ol8/selective_trace.so` (`dev-ol8` container) |
+| Same distros · MariaDB **12.3+** | `build/plugin_output-123-ol9/selective_trace.so` (`dev-123-ol8` container) |
 | Windows | not supported in this version (POSIX code; port feasible, see README) |
 
-The EL builds require only GLIBC_2.17+, so they load on EL8, EL9 and newer
-distros. **Validated on Oracle Linux 8 and 9** with the official RPMs
-(mariadb.org), full smoke test (FILE, TABLE, cross-schema JOIN,
-UNINSTALL/INSTALL):
+**Validated** with the official packages, full smoke test (FILE, TABLE,
+cross-schema JOIN, `*` wildcard, UNINSTALL/INSTALL):
 
-- **MariaDB 11.4.12** → `plugin_output-ol8/` (OL8 and OL9)
-- **MariaDB 12.3.2** → `plugin_output-123-ol9/` (OL9)
+- **MariaDB 11.4.12/11.4.13** → `plugin_output-ol8/` on Oracle Linux 8, Oracle
+  Linux 9, and Ubuntu 24.04 (official `mariadb:11.4.4` image)
+- **MariaDB 12.3.2/12.3.3** → `plugin_output-123-ol9/` on Oracle Linux 9
 
 > ⚠️ **The server series matters**: the audit ABI changed from `0x0302`
 > (11.4) to `0x0303` (12.3), so the 11.4 `.so` will **not** load on a 12.3

@@ -2,7 +2,10 @@ version: "3.8"
 
 services:
   # ---------------------------------------------------------------------
-  # Container de desenvolvimento: fonte do MariaDB + toolchain + Claude Code
+  # Container de desenvolvimento: fonte do MariaDB + toolchain + Claude Code.
+  # Ubuntu só por conveniência de iteração rápida (edição/compile/teste do
+  # dia a dia) — o .so daqui NÃO entra em release. O binário de release para
+  # 11.4 é sempre o do dev-ol8 (glibc 2.17, já cobre Ubuntu/Debian/EL também).
   # ---------------------------------------------------------------------
   dev:
     build:

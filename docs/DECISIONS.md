@@ -783,3 +783,33 @@ quoted, and the `*` in `selective_trace_tables` is inert — 31 new checks,
 every INSERT/UPDATE/DELETE and none of the SELECTs; resetting the filter
 to empty immediately stopped logging (fail-safe intact) and setting it
 back to bare `*` resumed logging on the very next statement.
+
+## D31. Release artifacts collapse to one `.so` per MariaDB series (v1.3.0 packaging)
+
+The release matrix had 3 binaries: Ubuntu/11.4, EL8-EL9/11.4, EL8-EL9/12.3.
+The Ubuntu one was redundant — D14 already notes the EL8 build (gcc-toolset-12,
+glibc 2.17 floor) "covers EL8, EL9 e distros mais novas", and glibc is
+backward-compatible (a binary built against an older glibc always loads on a
+newer one, never the reverse). So the EL8-built `.so` for a given series
+already satisfies Ubuntu/Debian too; the Ubuntu-specific build added nothing
+but a second file with a narrower, misleading name.
+
+What was wrong was treating the split as per-*OS*, when the only real binary
+boundary is per-*MariaDB series* (11.4 vs 12.3 — the audit interface version,
+0x0302 vs 0x0303, D18). Two series cannot be collapsed the same way: that
+split is enforced by `mariadbd` itself at `INSTALL PLUGIN` (it checks the
+plugin's compiled interface version), not a build-time choice we can work
+around without runtime dispatch — not worth the complexity for this plugin.
+
+**Verified before dropping the Ubuntu artifact**, not assumed: copied
+`plugin_output-ol8/selective_trace.so` (the 11.4 EL8 build) onto the official
+`mariadb:11.4.4` image (Ubuntu 24.04 base) in place of the Ubuntu-built one,
+`INSTALL PLUGIN` → ACTIVE, full smoke test (FILE, TABLE, `*:dml` wildcard
+across a real schema, UNINSTALL/INSTALL) — identical behavior to the
+Ubuntu-built binary.
+
+**From 1.3.0 on, every release ships exactly 2 binaries**: one per MariaDB
+series (currently 11.4 and 12.3+), each built against the EL8 toolchain and
+each covering every homologated Linux distro for that series. The `dev`
+(Ubuntu) container stays for day-to-day development convenience only — its
+`.so` is never packaged into a release.

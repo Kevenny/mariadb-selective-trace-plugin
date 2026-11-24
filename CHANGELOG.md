@@ -6,6 +6,16 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [1.3.0] - 2026-10-27
 
+### Changed
+
+- **Release artifacts: 2 binaries instead of 3.** One `.so` per MariaDB
+  series (11.4, 12.3+), each built against the EL8 toolchain (glibc 2.17
+  floor) and covering every homologated Linux distro for that series,
+  Ubuntu/Debian included — glibc is backward-compatible, so the
+  previously-separate Ubuntu-built binary was redundant. Verified live:
+  the 11.4 EL8 build loads and traces correctly on the official
+  `mariadb:11.4.4` image (Ubuntu 24.04 base). See docs/DECISIONS.md D31.
+
 ### Added
 
 - **`*` wildcard in `selective_trace_schemas`**: matches every schema,
