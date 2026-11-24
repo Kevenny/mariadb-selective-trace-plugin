@@ -813,3 +813,32 @@ series (currently 11.4 and 12.3+), each built against the EL8 toolchain and
 each covering every homologated Linux distro for that series. The `dev`
 (Ubuntu) container stays for day-to-day development convenience only — its
 `.so` is never packaged into a release.
+
+## D32. Windows CI: every run had failed since v1.2.0 — a quoting bug, not a build bug
+
+`windows.yml` (`workflow_dispatch` / push of a `v*` tag) had **never**
+produced a `.dll`: every run (main, every version tag through v1.3.0)
+failed at the "Configure" step in under a second, before CMake even wrote
+`CMakeOutput.log`/`CMakeError.log` — so the "Dump CMake diagnostics on
+failure" step had nothing to upload, and the failure was invisible from the
+Actions UI (no admin token on hand to pull raw job logs either).
+
+**Root cause, reproduced locally** (same toolchain: VS Build Tools 2022,
+CMake 4.4.4, win_bison, same MariaDB 11.4.4 source, same command): pwsh's
+native-argument passing mangles an *unquoted* `-DNAME=3.5`-shaped token —
+`cmake.exe` receives `-DCMAKE_POLICY_VERSION_MINIMUM=3` and a stray `.5` as
+a second, separate argument (confirmed with `cmake -E echo` in isolation:
+unquoted prints `...=3 .5`, quoted prints `...=3.5` intact). CMake logs the
+stray `.5` as "Ignoring extra path from command line" and then fails at
+`CMakeLists.txt:17 (CMAKE_MINIMUM_REQUIRED)`: *"Invalid
+CMAKE_POLICY_VERSION_MINIMUM value \"3\". A numeric major.minor[.patch...]
+must be given."* — the exact point and exit shape every CI run showed.
+
+**Fix**: quote the value — `"-DCMAKE_POLICY_VERSION_MINIMUM=3.5"` instead of
+the bare token — in `windows.yml`. Nothing else in the workflow was at
+fault: `-DBISON_EXECUTABLE="${{ ... }}"` was already fully quoted and never
+hit this.
+
+**Verified**: configure (same flags as `windows.yml`, MariaDB 11.4.4) now
+reaches "Configuring done" / "Generating done" and lists `SELECTIVE_TRACE,
+Server plugin MODULE` among the enabled features — exit 0.

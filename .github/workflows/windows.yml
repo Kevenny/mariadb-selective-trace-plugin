@@ -87,12 +87,19 @@ jobs:
       # removed compatibility with the `cmake_minimum_required(VERSION <3.5)`
       # that the MariaDB tree still declares, turning what is only a
       # deprecation warning under CMake 3.x into a hard configure error.
+      #
+      # The value MUST be quoted ("3.5", not 3.5): pwsh's native-argument
+      # passing splits an unquoted =N.N token into two args ("...=3" and
+      # ".5"), so cmake receives CMAKE_POLICY_VERSION_MINIMUM=3 plus a stray
+      # ".5" path argument and the configure fails immediately with "Invalid
+      # CMAKE_POLICY_VERSION_MINIMUM value \"3\"" — reproduced and confirmed
+      # locally (same failure, same point) before this fix.
       - name: Configure (CMake · Visual Studio 2022 · x64)
         shell: pwsh
         run: |
           cmake -S "$env:MARIADB_SRC" -B "$env:MARIADB_BUILD" `
             -G "Visual Studio 17 2022" -A x64 `
-            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 `
+            "-DCMAKE_POLICY_VERSION_MINIMUM=3.5" `
             -DBISON_EXECUTABLE="${{ steps.bison.outputs.path }}" `
             -DPLUGIN_SELECTIVE_TRACE=DYNAMIC `
             -DWITH_SSL=bundled `
