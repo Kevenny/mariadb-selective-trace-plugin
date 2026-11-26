@@ -36,8 +36,8 @@
   the hot path only takes read locks, so queries never serialize.
 */
 
-#define PLUGIN_VERSION      0x0130
-#define PLUGIN_STR_VERSION  "1.3.0"
+#define PLUGIN_VERSION      0x0131
+#define PLUGIN_STR_VERSION  "1.3.1"
 
 #include <my_global.h>
 #include <my_pthread.h>
@@ -128,14 +128,24 @@ struct StatementState
   The default blob must be NUL-free BEFORE the server registers the
   sysvars and strdup()s it (that happens before init() runs), hence the
   shared-library constructor — same trick as server_audit's so_init().
+  Uses a C++ static-object constructor, not __attribute__((constructor))
+  (a GNU extension MSVC silently no-ops): left at __attribute__, this
+  buffer would stay all-zero on Windows, so strdup() would see a NUL at
+  byte 0 and hand every session a 1-byte default instead of
+  sizeof(StatementState)+1 — get_state() would then read/write past that
+  single byte on the THDVAR slot. Same bug class as Typelib_init above.
 */
 static char state_init_value[sizeof(struct StatementState) + 1];
 
-static void __attribute__((constructor)) selective_trace_so_init(void)
+struct So_init
 {
-  memset(state_init_value, 'O', sizeof(state_init_value) - 1);
-  state_init_value[sizeof(state_init_value) - 1]= 0;
-}
+  So_init()
+  {
+    memset(state_init_value, 'O', sizeof(state_init_value) - 1);
+    state_init_value[sizeof(state_init_value) - 1]= 0;
+  }
+};
+static So_init so_init;
 
 static MYSQL_THDVAR_STR(state,
     PLUGIN_VAR_NOSYSVAR | PLUGIN_VAR_NOCMDOPT | PLUGIN_VAR_MEMALLOC,
@@ -209,18 +219,27 @@ static const char *output_names[]= { "FILE", "TABLE", NullS };
   gained a 5th member (hidden_values) in 12.x, so a 4-value initializer
   warns there and a 5-value one does not compile on 11.4. Zero-initialized
   static storage + explicit field assignment is correct on both, and runs
-  in a constructor because the server reads the typelib while registering
-  the sysvars, before init().
+  before the server reads the typelib while registering the sysvars
+  (before init()) via a C++ static-object constructor — portable across
+  GCC/Clang and MSVC, unlike __attribute__((constructor)) (a GNU extension
+  that MSVC silently no-ops instead of rejecting: the struct stayed
+  zeroed, and find_type() dereferencing a NULL type_names crashed the
+  server on the first `SET GLOBAL selective_trace_output=...` on Windows;
+  reproduced on a live 10.6.10 Windows service before this fix).
 */
 static TYPELIB output_typelib;
 
-static void __attribute__((constructor)) selective_trace_typelib_init(void)
+struct Typelib_init
 {
-  output_typelib.count= array_elements(output_names) - 1;
-  output_typelib.name= "";
-  output_typelib.type_names= output_names;
-  output_typelib.type_lengths= NULL;
-}
+  Typelib_init()
+  {
+    output_typelib.count= array_elements(output_names) - 1;
+    output_typelib.name= "";
+    output_typelib.type_names= output_names;
+    output_typelib.type_lengths= NULL;
+  }
+};
+static Typelib_init typelib_init;
 
 static int check_filter_list(MYSQL_THD thd __attribute__((unused)),
                              struct st_mysql_sys_var *var,

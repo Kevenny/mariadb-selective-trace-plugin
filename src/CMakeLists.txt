@@ -28,3 +28,21 @@ SET(SELECTIVE_TRACE_SOURCES
 MYSQL_ADD_PLUGIN(selective_trace ${SELECTIVE_TRACE_SOURCES} MODULE_ONLY
                  RECOMPILE_FOR_EMBEDDED
                  LINK_LIBRARIES ${CMAKE_DL_LIBS})
+
+if(WIN32 AND TARGET selective_trace)
+  # None of MariaDB's plugin "services" (libservices/*.c — sql_service,
+  # debug_sync_service, etc.) are declared MYSQL_PLUGIN_EXPORT, so on a
+  # normal MSVC DLL (nothing exported unless marked) the server's
+  # dlsym()-equivalent lookup (sql_plugin.cc, GetProcAddress by symbol
+  # name) never finds "sql_service" in our .dll and can't inject the real
+  # function table — the plugin keeps the compile-time version-marker
+  # value from sql_service.c and crashes on first use (TABLE output's
+  # mysql_init()/mysql_real_connect_local(), i.e. every SET GLOBAL
+  # selective_trace_output=... on Windows). On Linux this is a non-issue:
+  # ELF .so symbols are exported by default, so dlsym() always finds them.
+  # WINDOWS_EXPORT_ALL_SYMBOLS reproduces that default for our .dll without
+  # touching MariaDB's own source. Reproduced and confirmed on a live
+  # Windows MariaDB service before this fix.
+  set_target_properties(selective_trace PROPERTIES
+                         WINDOWS_EXPORT_ALL_SYMBOLS TRUE)
+endif()

@@ -4,6 +4,39 @@ All notable changes to `selective_trace` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/), and the
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.3.1] - 2026-11-26
+
+### Fixed
+
+- **Windows: server crashed on the first `SET GLOBAL selective_trace_output=...`.**
+  `__attribute__((constructor))` is a GCC/Clang extension; MSVC silently
+  no-ops it instead of rejecting it, so `output_typelib` stayed
+  zero-initialized on Windows and `find_type()` crashed dereferencing its
+  NULL `type_names`. Switched both static-init constructors
+  (`output_typelib`, the THDVAR default blob) to C++ static-object
+  constructors, which run on load on every supported compiler. Verified
+  fixed on a live Windows MariaDB service.
+- **Windows: plugin DLL didn't export MariaDB's "services"** (`sql_service`
+  and friends, from `libservices/*.c`), which a normal MSVC DLL hides
+  unless explicitly marked — unlike a Linux `.so`, which exports every
+  global symbol by default. The server's load-time step that patches each
+  service global with the real function table silently found nothing to
+  patch. Added `WINDOWS_EXPORT_ALL_SYMBOLS` to the plugin's CMake target
+  to restore that default-export behavior on Windows.
+
+### Note
+
+- TABLE output on Windows is still **not homologated**. Local
+  verification of the services-export fix above was only possible against
+  MariaDB 10.6.10 (not a version this plugin supports — 11.4+/12.3+ only),
+  and on that server the writer thread still crashes in `ensure_conn()`
+  even with the fix applied: `sql_service` reads as unpatched at plugin
+  `init()`. Whether that residual crash is a 10.6.10-only artifact or also
+  affects 11.4+/12.3+ on Windows is unconfirmed — not tracked as a known
+  bug until verified against the official CI-built `.dll`
+  (`.github/workflows/windows.yml`) on a supported server. FILE output is
+  unaffected on any Windows version tested. See docs/DECISIONS.md D33.
+
 ## [1.3.0] - 2026-10-27
 
 ### Changed

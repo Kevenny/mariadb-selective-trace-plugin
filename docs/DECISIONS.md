@@ -842,3 +842,68 @@ hit this.
 **Verified**: configure (same flags as `windows.yml`, MariaDB 11.4.4) now
 reaches "Configuring done" / "Generating done" and lists `SELECTIVE_TRACE,
 Server plugin MODULE` among the enabled features — exit 0.
+
+## D33. Two real Windows runtime crashes fixed; a third left open because it was only reproduced on an unsupported server
+
+With D32's CI fix landed, a report came in against the user's own local
+Windows install: `SET GLOBAL selective_trace_output='TABLE'` took the
+`mariadb` service down. That server is MariaDB 10.6.10 — outside this
+plugin's supported range (11.4+/12.3+, D18's audit-ABI split) — so the
+first question was whether to even investigate on it. Decided yes, because
+reproducing and fixing a crash doesn't require the crash to be on a
+supported version; it only requires caution about which fixes get recorded
+as "confirmed" for supported servers versus "observed on this one install."
+
+**Bug #1 — confirmed, affects every Windows build, not 10.6.10-specific.**
+`output_typelib` and the THDVAR default blob were initialized by
+`__attribute__((constructor))` functions (same pattern `server_audit` uses
+on Linux). That attribute is a GCC/Clang extension; MSVC accepts it
+silently and never calls the function — no warning, no error. The struct
+stayed zero-initialized, so `find_type()` dereferenced a NULL
+`type_names` on the very first `SET GLOBAL selective_trace_output=...` on
+*any* Windows build of the plugin, not just this server. Reproduced live
+against the user's 10.6.10 service, then fixed by converting both to C++
+static-object constructors (`So_init`, `Typelib_init`), which every
+supported compiler (GCC, Clang, MSVC) guarantees runs before first use of
+the namespace they're declared in. Re-verified live: the command that used
+to take the service down now succeeds and the service stays up.
+
+**Bug #2 — confirmed mechanism, fix verified independently, but the
+downstream symptom it was chasing did not fully clear.** MariaDB's plugin
+"services" (`libservices/*.c`: `sql_service`, `debug_sync_service`, etc.)
+are each a global function-table pointer that starts out holding a
+version-marker constant; at plugin-load time the server looks the symbol
+up by name in the just-loaded module (`sql_plugin.cc`) and overwrites it
+with the real table. None of those globals are declared
+`MYSQL_PLUGIN_EXPORT`. On Linux this is a non-issue — ELF exports every
+global symbol from a `.so` by default — but a normal MSVC DLL exports
+*nothing* unless marked, so the server's lookup never finds `sql_service`
+in our `.dll` and never patches it. Confirmed by `dumpbin /EXPORTS`
+(symbol absent) and fixed with `WINDOWS_EXPORT_ALL_SYMBOLS` on the
+plugin's CMake target — confirmed present and resolvable afterward via an
+external `GetProcAddress` test. This is the correct, general fix for the
+mechanism and is kept regardless of what follows.
+
+**What's still open.** Even with bug #2's fix deployed, TABLE mode's
+writer thread still crashed on the 10.6.10 test server, in `ensure_conn()`
+→ `mysql_init()`, and a debug print showed `sql_service` still held the
+unpatched version-marker value at the very first plugin `init()` call —
+meaning the server-side patch step isn't completing for this symbol in
+this environment even though the symbol is now genuinely exported. An
+attempt to settle whether this is a 10.6.10-only artifact (an unsupported,
+older server whose plugin-loading internals may differ) or a gap that also
+reaches 11.4+/12.3+ on Windows was started — building an officially
+supported 11.4.4 server from source on Windows to retest — and abandoned:
+a from-source checkout has no `mariadb-install-db.exe`-style bootstrap and
+`--initialize-insecure` isn't accepted by that build, so standing up a
+fresh datadir to test against turned into a disproportionate yak-shave.
+
+**Decision**: ship bugs #1 and #2 as confirmed fixes (both are general
+Windows-portability corrections, independent of server version). Do
+**not** record the writer-thread crash as a known bug of a supported
+MariaDB series — it has only ever been observed against a server this
+plugin doesn't support. Instead, downgrade TABLE mode on Windows from
+"supported" to "not yet homologated" in the docs until it's retested
+against the actual CI-built `.dll` (`windows.yml`, which builds against
+the real 11.4.4/12.3.2 source) on an officially supported server. FILE
+mode has no dependency on plugin services and is unaffected.

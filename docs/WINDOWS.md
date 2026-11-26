@@ -82,6 +82,16 @@ Verify each output mode:
 - **TABLE**: `SET GLOBAL selective_trace_output = 'TABLE';` then
   `SELECT * FROM mysql.selective_trace_events ORDER BY id DESC LIMIT 10;`
   and confirm no self-logging loop.
+  > **Not yet homologated on Windows.** `SET GLOBAL
+  > selective_trace_output='TABLE'` no longer crashes the service (see
+  > docs/DECISIONS.md D33), but the writer thread's own `mysql_init()` call
+  > still crashed in testing against an unsupported MariaDB 10.6.10 Windows
+  > install — a plugin-services function table wasn't getting patched into
+  > the DLL at load time even after exporting it. Not confirmed whether
+  > this also affects 11.4+/12.3+ on Windows; needs retesting against the
+  > real CI-built `.dll` on a supported server before TABLE mode can be
+  > called homologated here. Use **FILE** output on Windows until this is
+  > resolved.
 
 `UNINSTALL PLUGIN selective_trace;` must not crash the server.
 
